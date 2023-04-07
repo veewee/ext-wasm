@@ -2,12 +2,19 @@
 name = "ext-wasm"
 version = "0.1.0"
 edition = "2021"
+authors = ["Toon Verwerft <toonverwerft@gmail.com>"]
+description = "A WASM extension for PHP"
+readme = "README.md"
+keywords = ["php", "extension", "webassembly"]
+categories = ["wasm"]
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 ext-php-rs = "*"
+wasmer = { version = "3.1.1", default-features = true }
+wasmer-compiler = "3.1.1"
 
 [profile.release]
 strip = "debuginfo"
