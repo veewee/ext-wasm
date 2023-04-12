@@ -40,6 +40,29 @@ impl WasmInstance {
 
         Ok(result[0].unwrap_i32())
     }
+
+    pub fn __get(&mut self, accessor: String) -> PhpResult<i32> {
+        let _prop = match self.instance.exports.get_global(&accessor) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
+
+        let value = _prop.get(&mut self.store);
+
+        Ok(value.unwrap_i32())
+    }
+
+    pub fn __set(&mut self, accessor: String, value: i32) -> PhpResult<()> {
+        let _prop = match self.instance.exports.get_global(&accessor) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
+
+        match _prop.set(&mut self.store, wasmer::Value::I32(value)) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(_f) => return Ok(()),
+        }
+    }
 }
 
 /// Used by the `phpinfo()` function and when you run `php -i`.
