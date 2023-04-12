@@ -14,16 +14,28 @@ pub struct AddOneInstance {
 impl AddOneInstance {
     pub fn __construct(wat : String) -> PhpResult<AddOneInstance> {
         let mut store = wasmer::Store::default();
-        let module = wasmer::Module::new(&store, &wat).expect("Failed parsing WAT!");
+        let module = match wasmer::Module::new(&store, &wat) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
         let import_object = wasmer::imports! {};
-        let instance = wasmer::Instance::new(&mut store, &module, &import_object).expect("Failed creating a wasm instance!");
+        let instance = match wasmer::Instance::new(&mut store, &module, &import_object) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
 
         Ok(AddOneInstance {store, instance}.into())
     }
 
     pub fn add_one(&mut self, value: i32) -> PhpResult<i32> {
-        let add_one = self.instance.exports.get_function("add_one").expect("Unable to locate the add_one function in the provided WAT!");
-        let result = add_one.call(&mut self.store, &[wasmer::Value::I32(value)]).expect("Failed to execute add_ine method!");
+        let add_one = match self.instance.exports.get_function("add_one") {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
+        let result = match add_one.call(&mut self.store, &[wasmer::Value::I32(value)]) {
+            Err(e) => return Err(PhpException::default(e.to_string())),
+            Ok(f) => f,
+        };
 
         Ok(result[0].unwrap_i32())
     }
