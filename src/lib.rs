@@ -27,18 +27,22 @@ impl WasmInstance {
         Ok(WasmInstance {store, instance}.into())
     }
 
-    pub fn __call(&mut self, method: String, attributes: Vec<i32>) -> PhpResult<i32> {
+    pub fn __call(&mut self, method: String, attributes: Vec<i32>) -> PhpResult<Option<i32>> {
         let _function = match self.instance.exports.get_function(&method) {
             Err(e) => return Err(PhpException::default(e.to_string())),
             Ok(f) => f,
         };
         let wasm_attributes : Vec<wasmer::Value> = attributes.into_iter().map(|value| wasmer::Value::I32(value)).collect();
-        let result = match _function.call(&mut self.store, &wasm_attributes) {
+        let result = match _function.call(&mut self.store, &wasm_attributes).map(<[_]>::into_vec) {
             Err(e) => return Err(PhpException::default(e.to_string())),
             Ok(f) => f,
         };
 
-        Ok(result[0].unwrap_i32())
+        Ok(match result.len() {
+            0 => None,
+            1 => Some(result[0].unwrap_i32()),
+            _ => None // TODO: return tupple
+        })
     }
 
     pub fn __get(&mut self, accessor: String) -> PhpResult<i32> {

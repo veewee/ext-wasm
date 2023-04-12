@@ -13,5 +13,7 @@ $instance = new Wasm\WasmInstance(
 
 var_dump($instance->some);
 $instance->some = 1;
+var_dump($instance->some);
+var_dump($instance->set_some(21));
 var_dump($instance->get_some());
 
