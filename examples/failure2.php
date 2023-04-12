@@ -1,6 +1,6 @@
 <?php
 
-$instance = new Wasm\AddOneInstance(
+$instance = new Wasm\WasmInstance(
     <<<'EOWAT'
     (module
       (type $t0 (func (param i32) (result i32)))
@@ -11,4 +11,4 @@ $instance = new Wasm\AddOneInstance(
     EOWAT
 );
 
-var_dump($instance->addOne(42));
+var_dump($instance->add_one(42));

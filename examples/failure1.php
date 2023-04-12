@@ -1,9 +1,9 @@
 <?php
 
-$instance = new Wasm\AddOneInstance(
+$instance = new Wasm\WasmInstance(
     <<<'EOWAT'
     (mosqdkfjsqkdfjsqdfjjqsdfjk
     EOWAT
 );
 
-var_dump($instance->addOne(42));
+var_dump($instance->add_one(42));

@@ -3,9 +3,9 @@
 // Stubs for ext-wasm
 
 namespace Wasm {
-    class AddOneInstance {
+    class WasmInstance {
         public function __construct(string $wat) {}
 
-        public function addOne(int $value): int {}
+        public function __call(string $method, array $attributes): int {}
     }
 }

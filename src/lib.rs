@@ -4,15 +4,15 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::zend::ModuleEntry;
 use ext_php_rs::*;
 
-#[php_class(name="Wasm\\AddOneInstance")]
-pub struct AddOneInstance {
+#[php_class(name="Wasm\\WasmInstance")]
+pub struct WasmInstance {
     pub store: wasmer::Store,
     pub instance: wasmer::Instance,
 }
 
 #[php_impl]
-impl AddOneInstance {
-    pub fn __construct(wat : String) -> PhpResult<AddOneInstance> {
+impl WasmInstance {
+    pub fn __construct(wat : String) -> PhpResult<WasmInstance> {
         let mut store = wasmer::Store::default();
         let module = match wasmer::Module::new(&store, &wat) {
             Err(e) => return Err(PhpException::default(e.to_string())),
@@ -24,15 +24,16 @@ impl AddOneInstance {
             Ok(f) => f,
         };
 
-        Ok(AddOneInstance {store, instance}.into())
+        Ok(WasmInstance {store, instance}.into())
     }
 
-    pub fn add_one(&mut self, value: i32) -> PhpResult<i32> {
-        let add_one = match self.instance.exports.get_function("add_one") {
+    pub fn __call(&mut self, method: String, attributes: Vec<i32>) -> PhpResult<i32> {
+        let _function = match self.instance.exports.get_function(&method) {
             Err(e) => return Err(PhpException::default(e.to_string())),
             Ok(f) => f,
         };
-        let result = match add_one.call(&mut self.store, &[wasmer::Value::I32(value)]) {
+        let wasm_attributes : Vec<wasmer::Value> = attributes.into_iter().map(|value| wasmer::Value::I32(value)).collect();
+        let result = match _function.call(&mut self.store, &wasm_attributes) {
             Err(e) => return Err(PhpException::default(e.to_string())),
             Ok(f) => f,
         };
