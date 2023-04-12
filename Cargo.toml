@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ext-php-rs = "*"
-wasmer = { version = "3.1.1", default-features = true }
+wasmer = { version = "3.1.1", default-features = true, features = ["sys"] }
 wasmer-compiler = "3.1.1"
 
 [profile.release]
