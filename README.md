@@ -16,20 +16,24 @@ cargo php install
 $instance = new Wasm\WasmInstance(
     <<<'EOWAT'
     (module
-      (type $t0 (func (param i32) (result i32)))
-      (func $add_one (export "add_one") (type $t0) (param $p0 i32) (result i32)
-        get_local $p0
-        i32.const 1
-        i32.add))
+      (global $some (export "some") (mut i32) (i32.const 0))
+      (func (export "get_some") (result i32) (global.get $some))
+      (func (export "set_some") (param i32) (global.set $some (local.get 0))))
     EOWAT
 );
 
-var_dump($instance->add_one(42));
+var_dump($instance->some);
+$instance->some = 1;
+var_dump($instance->some);
+var_dump($instance->set_some(21));
+var_dump($instance->get_some());
 ```
 
 ```bash
-php -d extension=./target/debug/libext_wasm.dylib examples/function.php
+php -d extension=./target/debug/libext_wasm.dylib examples/global.php
 ```
+
+Currently, this package supports `global` access and function `exports`.
 
 ## Stubs
 
@@ -37,4 +41,8 @@ php -d extension=./target/debug/libext_wasm.dylib examples/function.php
 cargo php stubs
 ```
 
+## Roadmap
+
+[You can find a more detailed roadmap here.](ROADMAP.md)
+Feel free to give me some additional keyboards! :)
 

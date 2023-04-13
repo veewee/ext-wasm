@@ -14,29 +14,27 @@ pub struct WasmInstance {
 impl WasmInstance {
     pub fn __construct(wat : String) -> PhpResult<WasmInstance> {
         let mut store = wasmer::Store::default();
-        let module = match wasmer::Module::new(&store, &wat) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
+        let module = wasmer::Module::new(&store, &wat)
+            .map_err(|err| PhpException::default(err.to_string()))?;
+        
         let import_object = wasmer::imports! {};
-        let instance = match wasmer::Instance::new(&mut store, &module, &import_object) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
+        let instance = wasmer::Instance::new(&mut store, &module, &import_object)
+            .map_err(|err| PhpException::default(err.to_string()))?;
 
         Ok(WasmInstance {store, instance}.into())
     }
 
     pub fn __call(&mut self, method: String, attributes: Vec<i32>) -> PhpResult<Option<i32>> {
-        let _function = match self.instance.exports.get_function(&method) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
-        let wasm_attributes : Vec<wasmer::Value> = attributes.into_iter().map(|value| wasmer::Value::I32(value)).collect();
-        let result = match _function.call(&mut self.store, &wasm_attributes).map(<[_]>::into_vec) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
+        let func = self.instance.exports.get_function(&method)
+            .map_err(|err| PhpException::default(err.to_string()))?;
+            
+        let wasm_attributes : Vec<wasmer::Value> = attributes.into_iter()
+            .map(|value| wasmer::Value::I32(value))
+            .collect();
+
+        let result = func.call(&mut self.store, &wasm_attributes)
+            .map(<[_]>::into_vec)
+            .map_err(|err| PhpException::default(err.to_string()))?;
 
         Ok(match result.len() {
             0 => None,
@@ -46,26 +44,22 @@ impl WasmInstance {
     }
 
     pub fn __get(&mut self, accessor: String) -> PhpResult<i32> {
-        let _prop = match self.instance.exports.get_global(&accessor) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
+        let prop = self.instance.exports.get_global(&accessor)
+            .map_err(|err| PhpException::default(err.to_string()))?;
 
-        let value = _prop.get(&mut self.store);
+        let value = prop.get(&mut self.store);
 
         Ok(value.unwrap_i32())
     }
 
-    pub fn __set(&mut self, accessor: String, value: i32) -> PhpResult<()> {
-        let _prop = match self.instance.exports.get_global(&accessor) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(f) => f,
-        };
+    pub fn __set(&mut self, accessor: String, value: i32) -> PhpResult<Option<()>> {
+        let prop = self.instance.exports.get_global(&accessor)
+            .map_err(|err| PhpException::default(err.to_string()))?;
 
-        match _prop.set(&mut self.store, wasmer::Value::I32(value)) {
-            Err(e) => return Err(PhpException::default(e.to_string())),
-            Ok(_f) => return Ok(()),
-        }
+        prop.set(&mut self.store, wasmer::Value::I32(value))
+            .map_err(|err| PhpException::default(err.to_string()))?;
+
+        Ok(None)
     }
 }
 
