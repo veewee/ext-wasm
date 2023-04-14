@@ -1,0 +1,85 @@
+name: 'setup ext-wasm envrionment'
+
+inputs:
+  os:
+    required: true
+  php:
+    required: true
+  rust:
+    required: false
+    default: 'stable'
+  clang:
+    required: false
+    default: 14
+
+runs:
+  using: 'composite'
+  steps:
+      - name: "installing PHP"
+        uses: "shivammathur/setup-php@v2"
+        with:
+          php-version: "${{ inputs.php }}"
+          ini-values: memory_limit=-1
+          tools: composer:v2, cs2pr
+          extensions: bcmath, mbstring, intl, sodium, json
+          coverage: ${{ inputs.coverage }}
+
+#      - name: "TEST"
+#        shell: bash
+#        run: |
+#          php --ini
+#          php-config          
+
+      - name: "installing Rust"
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ inputs.rust }}
+          override: true
+          components: rustfmt, clippy
+      
+      # LLVM & Clang
+      - name: Cache LLVM and Clang
+        id: cache-llvm
+        uses: actions/cache@v3
+        if: "!contains(matrix.os, 'windows')"
+        with:
+          path: ${{ runner.temp }}/llvm-${{ inputs.clang }}
+          key: ${{ matrix.os }}-llvm-${{ inputs.clang }}
+
+      - name: Setup LLVM & Clang
+        id: clang
+        uses: KyleMayes/install-llvm-action@v1
+        if: "!contains(matrix.os, 'windows')"
+        with:
+          version: ${{ inputs.clang }}
+          directory: ${{ runner.temp }}/llvm-${{ inputs.clang }}
+          cached: ${{ steps.cache-llvm.outputs.cache-hit }}
+
+      - name: Configure Clang
+        if: "!contains(matrix.os, 'windows')"
+        shell: bash
+        run: |
+          echo "LIBCLANG_PATH=${{ runner.temp }}/llvm-${{ inputs.clang }}/lib" >> $GITHUB_ENV
+          echo "LLVM_VERSION=${{ steps.clang.outputs.version }}" >> $GITHUB_ENV
+          echo "LLVM_CONFIG_PATH=${{ runner.temp }}/llvm-${{ inputs.clang }}/bin/llvm-config" >> $GITHUB_ENV
+
+      - name: Configure Clang (macOS only)
+        if: "contains(matrix.os, 'macos')"
+        shell: bash
+        run: echo "SDKROOT=$(xcrun --show-sdk-path)" >> $GITHUB_ENV
+
+      - name: "caching dependencies"
+        uses: "actions/cache@v3"
+        with:
+          path: |
+            ~/.composer/cache
+            vendor
+            ~/.cargo
+            target
+          key: "php-${{ inputs.php }}-rust-${{ inputs.rust }}-os-${{ inputs.os }}"
+          restore-keys: "php-${{ inputs.php }}-rust-${{ inputs.rust }}-os-${{ inputs.os }}"
+
+      - name: "Run setup scripts"
+        shell: bash
+        run: |
+          make setup-ci

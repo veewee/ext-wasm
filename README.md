@@ -5,9 +5,15 @@
 
 ## Installation
 
+**Prerequisites:**
+
+* rust toolchain
+* php >= 8.0 (phpdev, php-cli, php-config)
+* clang
+
+
 ```sh
-cargo build
-cargo php install
+make install
 ```
 
 ## Usage
@@ -30,7 +36,7 @@ var_dump($instance->get_some());
 ```
 
 ```bash
-php -d extension=./target/debug/libext_wasm.dylib examples/global.php
+php examples/global.php
 ```
 
 Currently, this package supports `global` access and function `exports`.

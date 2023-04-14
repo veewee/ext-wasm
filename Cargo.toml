@@ -12,6 +12,7 @@ categories = ["wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
+cargo-php = "0.1.7"
 ext-php-rs = "*"
 wasmer = { version = "3.1.1", default-features = true, features = ["sys"] }
 wasmer-compiler = "3.1.1"

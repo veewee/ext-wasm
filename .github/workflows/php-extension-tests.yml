@@ -1,0 +1,36 @@
+name: "php-extension-tests"
+
+on:
+  pull_request: ~
+  push: ~
+
+jobs:
+  php-extension-tests:
+    name: "php-extension-tests"
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        php:
+          - "8.0"
+          - "8.1"
+          - "8.2"
+        os:
+          - "ubuntu-latest"
+          - "macos-latest"
+          - "windows-latest"
+      fail-fast: false
+
+    steps:
+      - name: "checkout"
+        uses: "actions/checkout@v3"
+
+      - name: setup
+        uses: ./.github/actions/setup
+        with:
+          php: ${{ matrix.php }}
+          os: ${{ matrix.os }}
+
+      - name: "Running PHP extension testcases"
+        run: make phpunit
