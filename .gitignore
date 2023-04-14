@@ -1,3 +1,4 @@
 /target
 /Cargo.lock
 .phpunit.cache
+.phpunit.result.cache
