@@ -4,6 +4,7 @@
 - [ ] provide custom exception class(es) - might require https://github.com/davidcole1340/ext-php-rs/pull/214
 - [ ] allow multiple return types on __call()
 - [ ] add extension tests
+- [ ] check if `examples/function-multiple_arguments.php` fails because of user error or if it is an issue with `ext-php-rs`
 - [x] add github actions workflow
 - [ ] see if we can provide type-metadata to build proxies
 - [ ] see if we can make decorators work (inheritance crashes the system) - might not work because of https://github.com/davidcole1340/ext-php-rs/issues/203#issuecomment-1328057539
