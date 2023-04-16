@@ -1,3 +1,5 @@
+#![cfg_attr(windows, feature(abi_vectorcall))]
+
 mod types;
 
 use ext_php_rs::prelude::*;
