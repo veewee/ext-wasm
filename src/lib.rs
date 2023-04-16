@@ -4,6 +4,7 @@ mod types;
 
 use ext_php_rs::prelude::*;
 use ext_php_rs::zend::ModuleEntry;
+use ext_php_rs::types::ZendClassObject;
 use ext_php_rs::*;
 use crate::types::Value;
 
@@ -15,16 +16,8 @@ pub struct WasmInstance {
 
 #[php_impl]
 impl WasmInstance {
-    pub fn __construct(wat : String) -> PhpResult<WasmInstance> {
-        let mut store = wasmer::Store::default();
-        let module = wasmer::Module::new(&store, &wat)
-            .map_err(|err| PhpException::default(err.to_string()))?;
-        
-        let import_object = wasmer::imports! {};
-        let instance = wasmer::Instance::new(&mut store, &module, &import_object)
-            .map_err(|err| PhpException::default(err.to_string()))?;
-
-        Ok(WasmInstance {store, instance}.into())
+    pub fn from_builder(builder : &mut ZendClassObject<InstanceBuilder>) -> PhpResult<WasmInstance> {
+        builder.build()
     }
 
     pub fn __call(&mut self, method: String, attributes: Vec<Value>) -> PhpResult<Option<Value>> {
@@ -64,6 +57,32 @@ impl WasmInstance {
             .map_err(|err| PhpException::default(err.to_string()))?;
 
         Ok(None)
+    }
+}
+
+#[php_class(name="Wasm\\InstanceBuilder")]
+pub struct InstanceBuilder {
+    pub wat: Box<String>,
+}
+
+#[php_impl]
+impl InstanceBuilder {    
+    pub fn from_wat(wat: String) -> InstanceBuilder {
+        InstanceBuilder {
+            wat: wat.clone().into()
+        }.into()
+    }
+
+    pub fn build(&mut self) -> PhpResult<WasmInstance> {
+        let mut store = wasmer::Store::default();
+        let module = wasmer::Module::new(&store, &*self.wat)
+            .map_err(|err| PhpException::default(err.to_string()))?;
+        
+        let import_object = wasmer::imports! {};
+        let instance = wasmer::Instance::new(&mut store, &module, &import_object)
+            .map_err(|err| PhpException::default(err.to_string()))?;
+
+        Ok(WasmInstance {store, instance}.into())
     }
 }
 

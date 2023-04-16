@@ -12,7 +12,7 @@ final class MyInstanceProxy {
 
   public function __construct() {
 
-    $this->proxy = new Wasm\WasmInstance(
+    $this->proxy = Wasm\InstanceBuilder::fromWat(
       <<<'EOWAT'
       (module
         (global $one (export "one") i32 (i32.const 1))
@@ -21,15 +21,15 @@ final class MyInstanceProxy {
         (func (export "get_some") (result i32) (global.get $some))
         (func (export "set_some") (param i32) (global.set $some (local.get 0))))
       EOWAT
-    );
+    )->build();
   }
 
-  public function __call(string $name, array $args): mixed 
+  public function __call(string $name, array $args): mixed
   {
     return $this->proxy->__call($name, $args);
   }
 
-  public function __get(string $name): mixed 
+  public function __get(string $name): mixed
   {
     return $this->proxy->__get($name);
   }
