@@ -1,4 +1,4 @@
-name: 'setup ext-wasm envrionment'
+name: 'setup ext-wasm environment'
 
 inputs:
   os:
@@ -30,13 +30,22 @@ runs:
 #          php --ini
 #          php-config          
 
-      - name: "installing Rust"
+      - name: "installing Stable Rust toolchain for Linux and Mac"
         uses: actions-rs/toolchain@v1
+        if: "!contains(matrix.os, 'windows')"
         with:
           toolchain: ${{ inputs.rust }}
           override: true
           components: rustfmt, clippy
-      
+
+      - name: "installing Nightly Rust toolchain for Windows"
+        uses: actions-rs/toolchain@v1
+        if: "contains(matrix.os, 'windows')"
+        with:
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
+
       # LLVM & Clang
       - name: Cache LLVM and Clang
         id: cache-llvm
