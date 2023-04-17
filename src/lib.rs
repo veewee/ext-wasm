@@ -2,9 +2,11 @@
 
 mod types;
 
+use std::collections::HashMap;
+
 use ext_php_rs::prelude::*;
 use ext_php_rs::zend::ModuleEntry;
-use ext_php_rs::types::ZendClassObject;
+use ext_php_rs::types::{ZendClassObject};
 use ext_php_rs::*;
 use crate::types::Value;
 
@@ -60,25 +62,58 @@ impl WasmInstance {
     }
 }
 
+type ImportsType = HashMap<String, HashMap<String, Value>>;
+
 #[php_class(name="Wasm\\InstanceBuilder")]
+#[derive(Default)]
 pub struct InstanceBuilder {
     pub wat: Box<String>,
+    pub imports : Box<ImportsType>,
 }
 
 #[php_impl]
 impl InstanceBuilder {    
     pub fn from_wat(wat: String) -> InstanceBuilder {
         InstanceBuilder {
-            wat: wat.clone().into()
+            wat: wat.clone().into(),
+            ..Default::default()
         }.into()
+    }
+
+    pub fn with_imports(
+        #[this] this: &mut ZendClassObject<InstanceBuilder>,
+        imports: ImportsType
+    ) -> &mut ZendClassObject<InstanceBuilder> {
+        this.imports = imports.into();
+
+        this
     }
 
     pub fn build(&mut self) -> PhpResult<WasmInstance> {
         let mut store = wasmer::Store::default();
         let module = wasmer::Module::new(&store, &*self.wat)
             .map_err(|err| PhpException::default(err.to_string()))?;
+
+        // Build imports
+        let mut import_object = wasmer::Imports::new();
+        for (namespace_name, namespace_dict) in (&*self.imports).into_iter() {
+            let namespace_name = namespace_name.to_string();
+            let namespace_dict_wasmer: Vec<(String, wasmer::Extern)> = namespace_dict
+                .into_iter()
+                .map(|(key, value)| (
+                    key.clone(),
+                    wasmer::Extern::Global(
+                        wasmer::Global::new_mut(&mut store, value.clone().into()) // TODO : define mutability..
+                    )
+                ))
+                .collect();
+
+            import_object.register_namespace(
+                &namespace_name,
+                namespace_dict_wasmer
+            );
+        }
         
-        let import_object = wasmer::imports! {};
         let instance = wasmer::Instance::new(&mut store, &module, &import_object)
             .map_err(|err| PhpException::default(err.to_string()))?;
 
