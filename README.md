@@ -19,14 +19,14 @@ make install
 ## Usage
 
 ```php
-$instance = new Wasm\WasmInstance(
+$instance = Wasm\InstanceBuilder::fromWat(
     <<<'EOWAT'
     (module
       (global $some (export "some") (mut i32) (i32.const 0))
       (func (export "get_some") (result i32) (global.get $some))
       (func (export "set_some") (param i32) (global.set $some (local.get 0))))
     EOWAT
-);
+)->build();
 
 var_dump($instance->some);
 $instance->some = 1;

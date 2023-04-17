@@ -1,6 +1,6 @@
 <?php
 
-$instance = new Wasm\WasmInstance(
+$instance = Wasm\InstanceBuilder::fromWat(
   <<<'EOWAT'
     (module
       (func $swap (export "swap") (param i32 i32) (result i32 i32)
@@ -8,6 +8,6 @@ $instance = new Wasm\WasmInstance(
       )
     )
     EOWAT
-);
+)->build();
 
 var_dump($instance->swap(1, 2));

@@ -3,8 +3,14 @@
 // Stubs for ext-wasm
 
 namespace Wasm {
+    class InstanceBuilder {
+        public static function fromWat(string $wat): \Wasm\InstanceBuilder {}
+
+        public function build(): \Wasm\WasmInstance {}
+    }
+
     class WasmInstance {
-        public function __construct(string $wat) {}
+        public static function fromBuilder(\Wasm\InstanceBuilder $builder): \Wasm\WasmInstance {}
 
         public function __call(string $method, array $attributes): mixed {}
 

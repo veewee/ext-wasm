@@ -9,6 +9,7 @@ compile:																		## compiles a release version of this extension
 
 stubs:																			## Generates stubs
 	cargo php stubs;
+	cat ext-wasm.stubs.php;
 
 setup-ci:																		## Setup CI
 	make compile

@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 class FunctionTest extends TestCase
 {
     public function test_it_can_call_function() {
-        $instance = new \Wasm\WasmInstance(
+        $instance = \Wasm\InstanceBuilder::fromWat(
             <<<'EOWAT'
             (module
               (type $t0 (func (param i32) (result i32)))
@@ -16,8 +16,8 @@ class FunctionTest extends TestCase
                 i32.const 1
                 i32.add))
             EOWAT
-        );
-        
+        )->build();
+
         self::assertSame(43, $instance->add_one(42));
     }
 }

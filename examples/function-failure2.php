@@ -1,6 +1,6 @@
 <?php
 
-$instance = new Wasm\WasmInstance(
+$instance = Wasm\InstanceBuilder::fromWat(
     <<<'EOWAT'
     (module
       (type $t0 (func (param i32) (result i32)))
@@ -9,6 +9,6 @@ $instance = new Wasm\WasmInstance(
         i32.const 1
         i32.add))
     EOWAT
-);
+)->build();
 
 var_dump($instance->add_one('invalid'));
