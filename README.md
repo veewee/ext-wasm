@@ -39,12 +39,12 @@ var_dump($instance->get_some());
 php examples/global.php
 ```
 
-Currently, this package supports `global` access and function `exports`.
+Check out the [examples](examples) folder for more examples.
 
 ## Stubs
 
 ```
-cargo php stubs
+make stubs
 ```
 
 ## Roadmap

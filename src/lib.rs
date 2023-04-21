@@ -3,12 +3,11 @@
 mod types;
 
 use std::collections::HashMap;
-
 use ext_php_rs::prelude::*;
 use ext_php_rs::zend::ModuleEntry;
 use ext_php_rs::types::{ZendClassObject};
 use ext_php_rs::*;
-use crate::types::Value;
+use crate::types::value::Value;
 
 #[php_class(name="Wasm\\WasmInstance")]
 pub struct WasmInstance {
@@ -62,13 +61,11 @@ impl WasmInstance {
     }
 }
 
-type ImportsType = HashMap<String, HashMap<String, Value>>;
-
 #[php_class(name="Wasm\\InstanceBuilder")]
 #[derive(Default)]
 pub struct InstanceBuilder {
     pub wat: Box<String>,
-    pub imports : Box<ImportsType>,
+    pub imports : Option<Box<WasmImports>>,
 }
 
 #[php_impl]
@@ -80,13 +77,12 @@ impl InstanceBuilder {
         }.into()
     }
 
-    pub fn with_imports(
+    // TODO : Change return type to be fluent (see #28)
+    pub fn import<'a>(
         #[this] this: &mut ZendClassObject<InstanceBuilder>,
-        imports: ImportsType
-    ) -> &mut ZendClassObject<InstanceBuilder> {
-        this.imports = imports.into();
-
-        this
+        imports: &mut ZendClassObject<WasmImports>
+    ) -> () {
+        this.imports = Some((*imports).clone().into());
     }
 
     pub fn build(&mut self) -> PhpResult<WasmInstance> {
@@ -96,28 +92,87 @@ impl InstanceBuilder {
 
         // Build imports
         let mut import_object = wasmer::Imports::new();
-        for (namespace_name, namespace_dict) in (&*self.imports).into_iter() {
-            let namespace_name = namespace_name.to_string();
-            let namespace_dict_wasmer: Vec<(String, wasmer::Extern)> = namespace_dict
-                .into_iter()
-                .map(|(key, value)| (
-                    key.clone(),
-                    wasmer::Extern::Global(
-                        wasmer::Global::new_mut(&mut store, value.clone().into()) // TODO : define mutability..
-                    )
-                ))
-                .collect();
-
-            import_object.register_namespace(
-                &namespace_name,
-                namespace_dict_wasmer
-            );
+        if self.imports.is_some() {
+            import_object = (self.imports.as_mut().unwrap()).into_wasmer_imports(&mut store)
         }
         
         let instance = wasmer::Instance::new(&mut store, &module, &import_object)
             .map_err(|err| PhpException::default(err.to_string()))?;
 
         Ok(WasmInstance {store, instance}.into())
+    }
+}
+
+
+#[php_class(name="Wasm\\Imports")]
+#[derive(Clone)]
+pub struct WasmImports {
+    pub registry : HashMap<(String, String), WasmGlobal>,
+}
+
+#[php_impl]
+impl WasmImports {    
+    pub fn create() -> WasmImports {
+        WasmImports {
+            registry: HashMap::new().into()
+        }.into()
+    }
+
+    // TODO : Change return type to be fluent (see #28)
+    pub fn define(
+        //&mut self,
+        #[this] this: &mut ZendClassObject<WasmImports>,
+        namespace : String,
+        variable : String,
+        value : &mut ZendClassObject<WasmGlobal>,
+    ) -> () {
+        this.registry.insert((namespace.clone(), variable.clone()), (*value).clone().into());
+    }
+}
+
+impl WasmImports {
+    pub fn into_wasmer_imports(&mut self, store : &mut wasmer::Store) -> wasmer::Imports {
+        let mut import_object = wasmer::Imports::new();
+
+        for ((namespace, name), value) in (&self.registry).into_iter() {
+            let converted = value.clone().into_wasmer_global(store);
+            import_object.define(&namespace, &name, converted);
+        }
+
+        import_object
+    }
+}
+
+#[php_class(name="Wasm\\Type\\Global")]
+#[derive(Clone)]
+pub struct WasmGlobal {
+    pub value : Box<Value>,
+    pub mutable : bool,
+}
+
+#[php_impl]
+impl WasmGlobal {
+    pub fn mutable(value: Value) -> WasmGlobal {
+        WasmGlobal {value: value.into(), mutable: true}.into()
+    }
+
+    pub fn immutable(value: Value) -> WasmGlobal {
+        WasmGlobal {value: value.into(), mutable: false}.into()
+    }
+}
+
+impl WasmGlobal {
+    pub fn into_wasmer_global(&mut self, store : &mut wasmer::Store) -> wasmer::Global {
+        match self.mutable {
+            true => wasmer::Global::new_mut(store, (*self.value).into()),
+            false => wasmer::Global::new(store, (*self.value).into()),
+        }
+    }
+
+    pub fn into_wasmer_extern(&mut self, store : &mut wasmer::Store) -> wasmer::Extern {
+        wasmer::Extern::Global(
+            self.into_wasmer_global(store)
+        )
     }
 }
 
