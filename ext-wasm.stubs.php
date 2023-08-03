@@ -3,12 +3,6 @@
 // Stubs for ext-wasm
 
 namespace Wasm {
-    class InstanceBuilder {
-        public static function fromWat(string $wat): \Wasm\InstanceBuilder {}
-
-        public function build(): \Wasm\WasmInstance {}
-    }
-
     class WasmInstance {
         public static function fromBuilder(\Wasm\InstanceBuilder $builder): \Wasm\WasmInstance {}
 
@@ -16,6 +10,29 @@ namespace Wasm {
 
         public function __get(string $accessor): mixed {}
 
-        public function __set(string $accessor, mixed $value): mixed {}
+        public function __set(string $accessor, mixed $value): void {}
+    }
+
+    class InstanceBuilder {
+        public static function fromWat(string $wat): \Wasm\InstanceBuilder {}
+
+        public function import(array $imports): void {}
+
+        public function build(): \Wasm\WasmInstance {}
+    }
+
+    class Imports {
+        public static function create(): self {}
+
+        public static function define(string $namespace, string $variable, \Wasm\Type\Global $value): void {}
+    }
+
+}
+
+namespace Wasm\Type {
+    class Global {
+        public static function mutable(mixed $value): self {}
+
+        public static function immutable(mixed $value): self {}
     }
 }
