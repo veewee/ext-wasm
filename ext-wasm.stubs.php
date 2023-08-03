@@ -16,7 +16,7 @@ namespace Wasm {
     class InstanceBuilder {
         public static function fromWat(string $wat): \Wasm\InstanceBuilder {}
 
-        public function import(array $imports): void {}
+        public function import(Imports $imports): void {}
 
         public function build(): \Wasm\WasmInstance {}
     }

@@ -70,6 +70,36 @@ class ImportsTest extends TestCase
         self::assertSame([32], $instance->read_g());
     }
 
+
+    public function test_it_can_call_external_function() {
+        $result = (object)['current' => false];
+
+        $imports = Imports::create();
+        $imports->define('env', 'greet', Type\Global::immutable(
+            function () use ($result) {
+                $result->current = true;
+            }
+        ));
+
+        $builder = $this->createBuilderFromWat(
+            <<<'EOWAT'
+            (module
+                (import "env" "greet" (func $greet))
+                (func
+                    call $greet
+                )
+                (start 1) ;; run the first function automatically
+            )
+            EOWAT
+        );
+
+
+        $builder->import($imports);
+        $instance = $builder->build();
+
+        self::assertTrue($result->current);
+    }
+
     private function createBuilderFromWat(?string $wat = null): InstanceBuilder
     {
         return InstanceBuilder::fromWat($wat ?? <<<'EOWAT'
