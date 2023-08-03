@@ -35,7 +35,12 @@ class InstanceTest extends TestCase
         self::assertInstanceOf(WasmInstance::class, $instance1);
         self::assertInstanceOf(WasmInstance::class, $instance2);
 
-        self::assertSame(33, $instance1->add_one(32));
+        self::assertSame([33], $instance1->add_one(32));
+    }
+
+    public function test_instance_cannot_be_build_on_invalid_wat() {
+        $this->expectException(\Exception::class);
+        WasmInstance::fromBuilder($this->createBuilderFromWat('(module INVALIDWAT'));
     }
 
     private function createBuilderFromWat(?string $wat = null): InstanceBuilder
