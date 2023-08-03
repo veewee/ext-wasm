@@ -67,7 +67,7 @@ class ImportsTest extends TestCase
 
         $instance = $builder->build();
 
-        self::assertSame(32, $instance->read_g());
+        self::assertSame([32], $instance->read_g());
     }
 
     private function createBuilderFromWat(?string $wat = null): InstanceBuilder

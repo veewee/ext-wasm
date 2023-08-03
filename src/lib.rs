@@ -21,7 +21,7 @@ impl WasmInstance {
         builder.build()
     }
 
-    pub fn __call(&mut self, method: String, attributes: Vec<Value>) -> PhpResult<Option<Value>> {
+    pub fn __call(&mut self, method: String, attributes: Vec<Value>) -> PhpResult<Option<Vec<Value>>> {
         let func = self.instance.exports.get_function(&method)
             .map_err(|err| PhpException::default(err.to_string()))?;
             
@@ -36,8 +36,7 @@ impl WasmInstance {
 
         Ok(match result.len() {
             0 => None,
-            1 => Some(result[0]),
-            _ => None // Todo support: Some(result), "Copy" solution for Value might not be best for case "1" either
+            _ => Some(result),
         })
     }
 
@@ -120,7 +119,6 @@ impl WasmImports {
 
     // TODO : Change return type to be fluent (see #28)
     pub fn define(
-        //&mut self,
         #[this] this: &mut ZendClassObject<WasmImports>,
         namespace : String,
         variable : String,
