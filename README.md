@@ -127,6 +127,7 @@ The [examples](examples) folder has small scripts for each feature. [examples/ma
 ## Limits worth knowing
 
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.
+- All wasm objects in a PHP thread share one wasmtime store, so memories, tables and functions can be combined freely as in JS. wasmtime frees an instance only when its store goes away, which happens once no `Instance`, `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` is left. In PHP-FPM and the CLI that is the end of every request. In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store, and let instances go at the end of each request. Keeping one instance alive while creating new ones makes memory grow.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance keeps that instance alive until the PHP process ends.
 - A PHP callback cannot switch fibers while wasm waits for it: `Fiber::suspend()` inside a callback throws a `FiberError`. Calling wasm from inside a fiber, and suspending between calls, works as usual.
 - WASI is not supported yet.

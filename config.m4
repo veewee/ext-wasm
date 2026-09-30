@@ -19,13 +19,16 @@ if test "$PHP_WASM" != "no"; then
   CARGO_MANIFEST_DIR=$abs_srcdir
   PHP_SUBST([CARGO_MANIFEST_DIR])
   PHP_SUBST([CARGO])
+  dnl ext-php-rs reads PHP_CONFIG to find the headers, so cargo builds against the
+  dnl PHP that configure was pointed at, not whichever php-config is first in PATH.
+  PHP_SUBST([PHP_CONFIG])
 
   dnl cargo produces libwasm.dylib on macOS and libwasm.so elsewhere, while PHP
   dnl expects wasm.so on every Unix platform.
   cat >> Makefile.fragments <<'FRAGMENT'
 
 cargo_build:
-	cd $(CARGO_MANIFEST_DIR) && $(CARGO) build --release --locked
+	cd $(CARGO_MANIFEST_DIR) && PHP_CONFIG=$(PHP_CONFIG) $(CARGO) build --release --locked
 	test -d modules || mkdir modules
 	cp $(CARGO_MANIFEST_DIR)/target/release/libwasm.dylib modules/wasm.so 2>/dev/null || \
 		cp $(CARGO_MANIFEST_DIR)/target/release/libwasm.so modules/wasm.so
