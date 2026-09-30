@@ -63,6 +63,26 @@ final class ComponentSuspendingTest extends TestCase
           (func (export "[method]thing.value") (param "self" (borrow $thing)) (result u32) (canon lift (core func $i "value"))))
         WAT;
 
+    /** Exports a resource thing whose destructor calls later(). */
+    private const DESTRUCTOR = <<<'WAT'
+        (component
+          (import "later" (func $later (result u32)))
+          (core func $later-core (canon lower (func $later)))
+          (core module $d
+            (import "host" "later" (func $later (result i32)))
+            (func (export "dtor") (param i32) (drop (call $later))))
+          (core instance $di (instantiate $d (with "host" (instance (export "later" (func $later-core))))))
+          (alias core export $di "dtor" (core func $dtor))
+          (type $thing' (resource (rep i32) (dtor (core func $dtor))))
+          (core func $new (canon resource.new $thing'))
+          (core module $m
+            (import "host" "new" (func $new (param i32) (result i32)))
+            (func (export "ctor") (result i32) (call $new (i32.const 5))))
+          (core instance $i (instantiate $m (with "host" (instance (export "new" (func $new))))))
+          (export $thing "thing" (type $thing'))
+          (func (export "[constructor]thing") (result (own $thing)) (canon lift (core func $i "ctor"))))
+        WAT;
+
     /** @param array<string, mixed> $imports */
     private static function exports(array $imports): Exports
     {
@@ -375,5 +395,45 @@ final class ComponentSuspendingTest extends TestCase
 
         self::assertSame(0, $exitCode, $output);
         self::assertSame('1,2', $output);
+    }
+
+    public function test_a_resource_destructor_may_call_a_suspending_import_that_returns(): void
+    {
+        $calls = 0;
+        $exports = (new Instance(new Component(self::DESTRUCTOR), ['later' => new Suspending(function () use (&$calls): int {
+            ++$calls;
+
+            return 0;
+        })]))->exports;
+        $thing = $exports->get('thing')->new();
+
+        $fiber = new \Fiber(function () use (&$thing): void {
+            $thing = null;
+        });
+        $fiber->start();
+
+        self::assertTrue($fiber->isTerminated());
+        self::assertSame(1, $calls);
+        self::assertInstanceOf(\Wasm\Component\Resource::class, $exports->get('thing')->new());
+    }
+
+    public function test_a_resource_destructor_cannot_suspend(): void
+    {
+        $exports = (new Instance(new Component(self::DESTRUCTOR), ['later' => new Suspending(fn (): int => \Fiber::suspend())]))->exports;
+        $thing = $exports->get('thing')->new();
+
+        $fiber = new \Fiber(function () use (&$thing): void {
+            $thing = null;
+        });
+        try {
+            $fiber->start();
+            self::fail('the destructor suspended');
+        } catch (\FiberError) {
+        }
+
+        // Like any failed call, it leaves the instance unusable.
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('cannot enter component instance');
+        $exports->get('thing')->new();
     }
 }
