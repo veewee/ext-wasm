@@ -136,7 +136,7 @@ $table->set(0, $math->exports->double);
 
 ### WASI
 
-`Wasm\Wasi` runs modules built for WASI preview1, the system interface most wasm programs outside the browser use. Its shape follows Node's `WASI` class:
+`Wasm\Wasi` runs programs built for WASI, the system interface most wasm programs outside the browser use. Its shape follows Node's `WASI` class. A core module gets WASI preview1 through `getImportObject()`, and a component gets preview2 (see [Components](#components)):
 
 ```php
 $wasi = new Wasm\Wasi(
@@ -158,6 +158,52 @@ stdout and stderr are captured and read after the run, up to `outputLimit` bytes
 Modules that work as a library export `_initialize` instead of `_start`. Call `$wasi->initialize($instance)` once and then use the exports as usual. Such an export calling `exit()` throws a `RuntimeError`.
 
 `getImportObject()` returns the WASI functions under `wasi_snapshot_preview1`, so you can combine them with imports of your own: `[...$wasi->getImportObject(), 'env' => [...]]`. A `Wasi` object belongs to one run of one module; create a new one for the next run.
+
+### Components
+
+A WebAssembly component describes its imports and exports in WIT, the interface language of the component model, so its functions take and return strings, records, lists and other typed values instead of numbers and memory addresses. The classes live in `Wasm\Component`, next to the core `Wasm\Module` and `Wasm\Instance`, and the value mapping is modelled on that of [jco](https://github.com/bytecodealliance/jco), the JavaScript toolchain for components, adapted where PHP differs:
+
+```php
+use Wasm\Component\Component;
+use Wasm\Component\Instance;
+
+$component = Component::fromFile('markdown.wasm');     // or new Component($bytesOrWat)
+$component->exports();   // [['name' => 'docs:markdown/render@0.1.0', 'kind' => 'instance', 'functions' => [...]]]
+
+$instance = new Instance($component, [
+    'docs:demo/log' => ['writeLine' => fn (string $line) => error_log($line)],   // an imported interface
+    'now' => fn (): int => time(),                                              // a function the world imports
+], wasi: new Wasm\Wasi());
+
+$instance->exports->get('docs:markdown/render')->render('**hi**');   // an exported interface
+$instance->exports->renderHtml('**hi**');                            // a function the world exports
+```
+
+`exports()` and `imports()` list every function with its WIT signature, such as `func(markdown: string) -> string`. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
+
+| WIT | PHP |
+|---|---|
+| `bool`, `string`, `char` | `bool`, `string`, a string of one character |
+| `s8` to `s64`, `u8` to `u32` | `int`, range-checked |
+| `u64` | `int`; values above `PHP_INT_MAX` keep their bits and come out negative, as with `unpack('J')` |
+| `f32`, `f64` | `float`, also accepting `int` |
+| `list<u8>` | binary string |
+| `list<T>`, `tuple<...>` | list array |
+| `record` | array with camelCase keys; `option` fields may be left out |
+| `flags` | array of camelCase names to `bool` |
+| `enum` | its case name as a string, such as `'dark-blue'` |
+| `option<T>` | `null` or the value |
+| `variant` | `new Wasm\Component\Variant('case-name', $payload)` |
+| `result` returned by a function | the ok value, or a thrown `Wasm\Exception\ComponentError` with `$payload` |
+| `result` anywhere else | `Wasm\Component\Result::ok($value)` or `Result::err($error)` |
+
+A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import: the component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance". A PHP import may call back into its own instance.
+
+With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1. A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
+
+Components cannot be combined with core objects: a component instance has a store of its own. Resources (WIT handles) are not supported yet: a function that uses one throws a `RuntimeError` naming the type, and an import that needs one is a `LinkError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
+
+[examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
 
 ### Async imports
 
@@ -218,7 +264,7 @@ The [examples](examples) folder has small scripts for each feature, and nine lar
 - [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
 - [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
-- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark, with the string passing explained.
+- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
 - [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
 - [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
@@ -241,7 +287,7 @@ The cache holds machine code that runs inside the PHP process, so anyone who can
 - wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance, or an object the instance imports, keeps that instance and its store alive until the PHP process ends.
 - A plain PHP callback cannot switch Fibers while wasm waits for it: `Fiber::suspend()` inside it throws a `FiberError`. Wrap the callback in `Wasm\Suspending` to allow it (see [Async imports](#async-imports)). Calling wasm from inside a Fiber, and suspending between calls, works as usual.
-- WASI support covers preview1, not preview2 and the component model. A WASI program that waits on a file and a timer at once in a forked child has not been tested and might hang.
+- WASI covers preview1 for core modules and preview2 for components, not the async preview3. File access in a forked child after the parent used WASI is tested for both. A program that waits on a file and a timer at once in a forked child has not been tested.
 
 ## Development
 
