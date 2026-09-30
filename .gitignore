@@ -3,3 +3,4 @@
 .phpunit.cache
 .phpunit.result.cache
 tools/*.phar binary
+/examples/mago/dist/
