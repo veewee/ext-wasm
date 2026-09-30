@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 
 use wasmtime::{Config, Engine};
 
@@ -32,13 +32,15 @@ pub fn engine() -> &'static Engine {
 /// fork workers afterwards, so a forked child compiles on a pool of its own.
 /// The process that compiled first keeps the global pool, which compiles large
 /// modules about a third faster than a separate pool in measurements.
-pub fn compile_in_process_pool<R: Send>(compile: impl FnOnce() -> R + Send) -> R {
+pub fn compile_in_process_pool<R: Send>(
+    compile: impl FnOnce() -> R + Send,
+) -> Result<R, ThreadPoolBuildError> {
     static GLOBAL_POOL_OWNER: OnceLock<u32> = OnceLock::new();
     static FORKED_POOL: Mutex<Option<(u32, Arc<ThreadPool>)>> = Mutex::new(None);
 
     let pid = std::process::id();
     if *GLOBAL_POOL_OWNER.get_or_init(|| pid) == pid {
-        return compile();
+        return Ok(compile());
     }
 
     let pool = {
@@ -46,22 +48,21 @@ pub fn compile_in_process_pool<R: Send>(compile: impl FnOnce() -> R + Send) -> R
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match slot.as_ref() {
-            Some((owner, pool)) if *owner == pid => Some(pool.clone()),
+            Some((owner, pool)) if *owner == pid => pool.clone(),
             _ => {
                 // A pool inherited from a forking parent has no threads, and
                 // dropping it could block on them, so it is leaked instead.
                 if let Some(inherited) = slot.take() {
                     std::mem::forget(inherited);
                 }
-                let pool = ThreadPoolBuilder::new().build().ok().map(Arc::new);
-                *slot = pool.clone().map(|pool| (pid, pool));
+                // Falling back to the inherited pool would hang, so a pool
+                // that cannot be built is an error for this compile.
+                let pool = Arc::new(ThreadPoolBuilder::new().build()?);
+                *slot = Some((pid, pool.clone()));
                 pool
             }
         }
     };
 
-    match pool {
-        Some(pool) => pool.install(compile),
-        None => compile(),
-    }
+    Ok(pool.install(compile))
 }

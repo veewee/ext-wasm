@@ -68,6 +68,7 @@ impl Module {
     pub fn compile(bytes: &[u8]) -> PhpResult<Self> {
         let binary = wat::parse_bytes(bytes).map_err(compile_error)?;
         let inner = compile_in_process_pool(|| wasmtime::Module::from_binary(engine(), &binary))
+            .map_err(compile_error)?
             .map_err(compile_error)?;
         Ok(Self {
             inner,
@@ -78,7 +79,8 @@ impl Module {
 
 pub fn validate(bytes: &[u8]) -> bool {
     wat::parse_bytes(bytes).is_ok_and(|binary| {
-        compile_in_process_pool(|| wasmtime::Module::validate(engine(), &binary)).is_ok()
+        compile_in_process_pool(|| wasmtime::Module::validate(engine(), &binary))
+            .is_ok_and(|valid| valid.is_ok())
     })
 }
 
