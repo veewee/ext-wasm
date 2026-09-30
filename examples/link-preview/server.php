@@ -13,16 +13,25 @@ require __DIR__ . '/LinkPreview.php';
 
 use Wasm\Component\Http\Request;
 
-$hosts = array_filter(explode(',', getenv('LINK_PREVIEW_HOSTS') ?: 'www.php.net,*.wikipedia.org'));
+$hosts = array_filter(array_map('trim', explode(',', getenv('LINK_PREVIEW_HOSTS') ?: 'www.php.net,*.wikipedia.org')));
 $scheme = (($_SERVER['HTTPS'] ?? '') === 'on') ? 'https' : 'http';
-$headers = function_exists('getallheaders') ? getallheaders() : [];
+// The component only reads the path and query, so a missing Host header does not matter.
+$host = ($_SERVER['HTTP_HOST'] ?? '') ?: 'localhost';
 
-$response = (new LinkPreview($hosts))->handle(new Request(
-    $_SERVER['REQUEST_METHOD'],
-    "$scheme://{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
-    $headers,
-    file_get_contents('php://input'),
-));
+try {
+    $response = (new LinkPreview($hosts))->handle(new Request(
+        $_SERVER['REQUEST_METHOD'],
+        "$scheme://$host{$_SERVER['REQUEST_URI']}",
+        [],
+        file_get_contents('php://input'),
+    ));
+} catch (Throwable $e) {
+    // A trap or an invalid request; its message would show paths and a wasm backtrace.
+    error_log((string) $e);
+    http_response_code(500);
+    echo "the component failed to answer\n";
+    return;
+}
 
 http_response_code($response->status);
 foreach ($response->headers as $name => $values) {
