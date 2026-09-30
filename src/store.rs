@@ -159,6 +159,20 @@ pub fn standalone() -> SharedStore {
     })
 }
 
+/// Stops handing out `store` to new standalone objects once an instance uses it.
+///
+/// A callback that captures an imported object keeps its store alive in a
+/// cycle PHP cannot collect. Retiring the store limits that to the objects
+/// created for this instance, instead of every standalone object after it.
+pub fn retire_standalone(store: &SharedStore) {
+    STANDALONE.with(|standalone| {
+        let mut standalone = standalone.borrow_mut();
+        if std::ptr::eq(standalone.as_ptr(), Rc::as_ptr(store)) {
+            *standalone = Weak::new();
+        }
+    });
+}
+
 /// Creates a store of its own.
 pub fn new() -> SharedStore {
     Rc::new_cyclic(|handle| StoreHandle {

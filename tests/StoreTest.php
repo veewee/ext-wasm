@@ -193,6 +193,31 @@ final class StoreTest extends TestCase
         self::assertLessThan(100, (int) $output, "peak RSS grew by {$output} MiB");
     }
 
+    public function test_a_callback_cycle_does_not_pin_later_standalone_objects(): void
+    {
+        $output = $this->runPhp(<<<'PHP'
+            <?php
+            $unit = PHP_OS_FAMILY === 'Darwin' ? 1048576 : 1024;
+            function job(Wasm\Module $module): void {
+                $memory = new Wasm\Memory(['initial' => 1]);
+                // The callback holds $memory, which holds the store the callback lives in.
+                new Wasm\Instance($module, ['env' => ['memory' => $memory, 'f' => function () use ($memory): void {}]]);
+            }
+            job(new Wasm\Module('(module (import "env" "memory" (memory 1)) (import "env" "f" (func)))'));
+            gc_collect_cycles();
+            $before = getrusage()['ru_maxrss'] / $unit;
+            for ($i = 0; $i < 20; $i++) {
+                $memory = new Wasm\Memory(['initial' => 160]);
+                $memory->write(0, str_repeat("\1", 160 * 65536));
+                unset($memory);
+            }
+            echo (int) (getrusage()['ru_maxrss'] / $unit - $before);
+            PHP);
+
+        // 20 pinned memories of 10 MiB each would grow by about 200 MiB.
+        self::assertLessThan(100, (int) $output, "peak RSS grew by {$output} MiB");
+    }
+
     public function test_instances_without_shared_imports_do_not_share_a_store(): void
     {
         $math = new Instance(new Module(self::MATH));

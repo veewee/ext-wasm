@@ -27,6 +27,7 @@ impl Instance {
         store: Option<&StoreObject>,
     ) -> PhpResult<Self> {
         let store = store::choose(store, imports::stores(&module.inner, imports), store::new)?;
+        store::retire_standalone(&store);
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
             let instance = match wasmtime::Instance::new(&mut ctx, &module.inner, &imports) {
