@@ -165,6 +165,9 @@ pub struct StoreHandle {
     parked: Cell<bool>,
     request: RefCell<Option<suspend::Request>>,
     response: RefCell<Option<suspend::Response>>,
+    /// Values a parked call's callback handed back, dropped where PHP code may
+    /// run: before the next callback, or once the store borrow ends.
+    garbage: RefCell<Vec<Zval>>,
 }
 
 pub type SharedStore = Rc<StoreHandle>;
@@ -217,6 +220,7 @@ pub fn new() -> SharedStore {
         parked: Cell::new(false),
         request: RefCell::new(None),
         response: RefCell::new(None),
+        garbage: RefCell::new(Vec::new()),
     })
 }
 
@@ -370,6 +374,14 @@ impl StoreHandle {
         self.response.borrow_mut().take()
     }
 
+    pub fn put_garbage(&self, value: Zval) {
+        self.garbage.borrow_mut().push(value);
+    }
+
+    pub fn take_garbage(&self) -> Vec<Zval> {
+        std::mem::take(&mut *self.garbage.borrow_mut())
+    }
+
     /// Empties the slots after a driven call, however it ended.
     pub fn clear_slots(&self) {
         drop((self.take_request(), self.take_response()));
@@ -386,7 +398,9 @@ impl StoreHandle {
             values.reclaim();
             values.gc_threshold = values.live() * 2;
         }
-        std::mem::take(&mut store.data_mut().values.released)
+        let mut released = std::mem::take(&mut store.data_mut().values.released);
+        released.append(&mut self.take_garbage());
+        released
     }
 }
 

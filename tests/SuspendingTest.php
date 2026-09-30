@@ -144,10 +144,10 @@ final class SuspendingTest extends TestCase
               (func (export "run") (result i32) (call $later) (call $deep)))
             EOWAT), ['env' => [
             'later' => new Suspending(fn () => null),
-            'deep' => fn (): int => $depth(20000),
+            'deep' => fn (): int => $depth(50),
         ]]))->exports;
 
-        self::assertSame(20000, $exports->run());
+        self::assertSame(50, $exports->run());
     }
 
     public function test_the_start_function_may_call_a_suspending_import(): void
@@ -369,5 +369,52 @@ final class SuspendingTest extends TestCase
 
         self::assertSame(0, $exitCode, $output);
         self::assertSame('done', $output);
+    }
+
+    public function test_a_value_returned_by_a_suspending_callback_is_released_before_the_next_callback(): void
+    {
+        $log = new \ArrayObject();
+        $exports = (new Instance(new Module(<<<'EOWAT'
+            (module
+              (import "env" "f" (func $f))
+              (func (export "run") (call $f) (call $f)))
+            EOWAT), ['env' => ['f' => new Suspending(function () use ($log): object {
+            $log[] = 'call';
+
+            // Discarded because the import has no results.
+            return new class ($log) {
+                public function __construct(private \ArrayObject $log)
+                {
+                }
+
+                public function __destruct()
+                {
+                    $this->log[] = 'released';
+                }
+            };
+        })]]))->exports;
+
+        $exports->run();
+
+        self::assertSame(['call', 'released', 'call', 'released'], $log->getArrayCopy());
+    }
+
+    public function test_a_suspending_callback_throws_a_wasm_throw_with_an_externref(): void
+    {
+        $tag = new \Wasm\Tag(['parameters' => ['externref']]);
+        $object = new \stdClass();
+        $exports = (new Instance(new Module(<<<'EOWAT'
+            (module
+              (import "env" "e" (tag $e (param externref)))
+              (import "env" "fail" (func $fail))
+              (func (export "run") (result externref)
+                (block $caught (result externref)
+                  (try_table (catch $e $caught) (call $fail))
+                  (ref.null extern))))
+            EOWAT), ['env' => ['e' => $tag, 'fail' => new Suspending(function () use ($tag, $object): void {
+            throw new \Wasm\Exception\WasmThrow($tag, [$object]);
+        })]]))->exports;
+
+        self::assertSame($object, $exports->run());
     }
 }

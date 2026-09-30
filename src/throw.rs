@@ -8,7 +8,7 @@ use ext_php_rs::flags::{DataType, PropertyFlags};
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, ZendObject, Zval};
 use ext_php_rs::zend::{ClassEntry, ExecuteData, ExecutorGlobals};
-use wasmtime::{ExnRef, ExnRefPre, ExnType, Rooted, StoreContextMut, Val};
+use wasmtime::{ExnRef, ExnRefPre, ExnType, Rooted, StoreContextMut, Val, ValType};
 
 use crate::error::{error, type_error, value_error};
 use crate::store::{self, HostState};
@@ -104,7 +104,7 @@ fn initialize(this: &mut ZendObject, tag_zval: &Zval, payload: &Zval) -> PhpResu
     };
     tag.store.with(|mut ctx| {
         // Validating now reports a wrong payload where it was written, not where wasm catches it.
-        fields(&mut ctx, &tag.inner, &values)?;
+        check_fields(&mut ctx, &tag.inner, &values)?;
         remember_tag(&mut ctx, &tag.inner, tag_zval);
         Ok::<_, PhpException>(())
     })?;
@@ -117,11 +117,15 @@ fn initialize(this: &mut ZendObject, tag_zval: &Zval, payload: &Zval) -> PhpResu
     Ok(())
 }
 
-fn fields(
+/// Checks a payload against the tag without keeping the converted values.
+///
+/// Any PHP value is a valid externref, and skipping its conversion avoids an
+/// allocation, which a store refuses while a call is parked.
+fn check_fields(
     ctx: &mut StoreContextMut<'_, HostState>,
     tag: &wasmtime::Tag,
     values: &[&Zval],
-) -> PhpResult<Vec<Val>> {
+) -> PhpResult<()> {
     let ty = tag.ty(&*ctx);
     let params: Vec<_> = ty.ty().params().collect();
     if params.len() != values.len() {
@@ -131,11 +135,12 @@ fn fields(
             values.len()
         )));
     }
-    values
-        .iter()
-        .zip(&params)
-        .map(|(value, ty)| Ok(to_val(ctx, value, ty)?))
-        .collect()
+    for (value, ty) in values.iter().zip(&params) {
+        if !ty.matches(&ValType::EXTERNREF) {
+            to_val(ctx, value, ty)?;
+        }
+    }
+    Ok(())
 }
 
 /// Turns a wasm exception that reached PHP into a thrown `WasmThrow`.

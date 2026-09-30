@@ -59,7 +59,7 @@ pub type Response = Result<Zval, String>;
 /// PHP code cannot run on wasmtime's async stack, whose addresses fail PHP's
 /// stack limit check, so the function only asks `drive` to run the callback
 /// and waits for the answer.
-pub fn host_func(
+pub fn async_host_func(
     ctx: impl AsContextMut<Data = HostState>,
     ty: FuncType,
     key: usize,
@@ -137,12 +137,11 @@ impl Future for HostCall<'_> {
             &this.result_types,
             this.results,
         );
-        let values = &mut this.caller.data_mut().values;
         if let Ok(value) = returned {
-            values.release(value);
+            store.put_garbage(value);
         }
         if let Some(object) = thrown.and_then(|object| object.into_zval(false).ok()) {
-            values.release(object);
+            store.put_garbage(object);
         }
         Poll::Ready(outcome)
     }
@@ -168,7 +167,7 @@ pub fn drive<R>(
         }
         // Without a request wasmtime only yielded, for example inside its GC.
         if let Some(request) = store.take_request() {
-            run(store, request);
+            call_parked(store, request);
         }
     }
 }
@@ -178,7 +177,7 @@ pub fn drive<R>(
 /// When the callback leaves exit() or a destroyed Fiber's graceful exit
 /// pending, that poll fails the wasm call without running PHP, and the entry
 /// point's own error is not thrown over the pending one, so PHP keeps unwinding.
-fn run(store: &StoreHandle, request: Request) {
+fn call_parked(store: &StoreHandle, request: Request) {
     let Request {
         caller,
         callable,
@@ -187,6 +186,12 @@ fn run(store: &StoreHandle, request: Request) {
     } = request;
     let _parked = store.park(caller);
     let block = || (!suspending).then(FiberSwitchBlock::new);
+    {
+        // What the previous callback returned. Releasing it can run PHP
+        // destructors, which may use wasm objects again.
+        let _no_fiber_switch = block();
+        drop(store.take_garbage());
+    }
     let returned = {
         let _no_fiber_switch = block();
         let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();

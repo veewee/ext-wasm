@@ -22,7 +22,7 @@ pub fn host_func(
         .insert_permanent(callable.shallow_clone());
     let result_types: Vec<ValType> = ty.results().collect();
     if ctx.as_context().data().is_async {
-        return suspend::host_func(ctx, ty, key, result_types, suspending);
+        return suspend::async_host_func(ctx, ty, key, result_types, suspending);
     }
     ctx.as_context_mut().data_mut().sync_callbacks = true;
     wasmtime::Func::new(ctx, ty, move |mut caller, params, results| {
