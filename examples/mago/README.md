@@ -4,14 +4,27 @@
 
 ## Running it
 
-Install the extension (see the main README) and download the wasm build into `examples/mago/dist`:
+Install the extension with [PIE](https://github.com/php/pie). Until the first release is on Packagist, point PIE at the repository. Without a release there is no prebuilt binary, so PIE builds from source, which needs Rust from [rustup.rs](https://rustup.rs) and takes a few minutes:
+
+```sh
+pie repository:add vcs https://github.com/veewee/ext-wasm
+pie install veewee/ext-wasm:dev-main
+```
+
+From a local checkout, use `pie repository:add path /path/to/ext-wasm` instead. Check that PHP loads it:
+
+```sh
+php -r 'var_dump(extension_loaded("wasm"));'
+```
+
+Then download mago's wasm build into `examples/mago/dist`:
 
 ```sh
 examples/mago/download.sh          # mago 1.50.0
 examples/mago/download.sh 1.51.0   # or another release
 ```
 
-Then format a file:
+Format a file:
 
 ```sh
 php examples/mago/format.php path/to/file.php
