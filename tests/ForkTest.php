@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Test;
 
+require_once __DIR__ . '/AwaitsForkedChild.php';
+
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\TestCase;
 use Wasm\Instance;
@@ -14,6 +16,8 @@ use Wasm\Wasi;
 #[RequiresPhpExtension('pcntl')]
 final class ForkTest extends TestCase
 {
+    use AwaitsForkedChild;
+
     public function test_a_forked_child_can_compile_and_run_after_the_parent_compiled(): void
     {
         new Module(self::largeModule());
@@ -24,18 +28,7 @@ final class ForkTest extends TestCase
             exit($instance->exports->f0() === 0 ? 0 : 1);
         }
 
-        $deadline = microtime(true) + 20;
-        do {
-            if (pcntl_waitpid($pid, $status, WNOHANG) === $pid) {
-                self::assertSame(0, pcntl_wexitstatus($status));
-                return;
-            }
-            usleep(50_000);
-        } while (microtime(true) < $deadline);
-
-        posix_kill($pid, SIGKILL);
-        pcntl_waitpid($pid, $status);
-        self::fail('The forked child did not finish compiling within 20 seconds');
+        $this->assertChildExitsCleanly($pid, 'The forked child did not finish compiling');
     }
 
     public function test_a_forked_child_can_use_wasi_file_access_after_the_parent_did(): void
@@ -56,18 +49,7 @@ final class ForkTest extends TestCase
             exit($run() === 'from the host' ? 0 : 1);
         }
 
-        $deadline = microtime(true) + 20;
-        do {
-            if (pcntl_waitpid($pid, $status, WNOHANG) === $pid) {
-                self::assertSame(0, pcntl_wexitstatus($status));
-                return;
-            }
-            usleep(50_000);
-        } while (microtime(true) < $deadline);
-
-        posix_kill($pid, SIGKILL);
-        pcntl_waitpid($pid, $status);
-        self::fail('The forked child did not finish its WASI run within 20 seconds');
+        $this->assertChildExitsCleanly($pid, 'The forked child did not finish its WASI run');
     }
 
     private static function largeModule(): string

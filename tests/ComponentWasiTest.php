@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Test;
 
+require_once __DIR__ . '/AwaitsForkedChild.php';
+
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
@@ -18,6 +20,8 @@ use Wasm\Wasi;
  */
 final class ComponentWasiTest extends TestCase
 {
+    use AwaitsForkedChild;
+
     private const FIXTURE = __DIR__ . '/fixtures/component-wasi/component-wasi.wasm';
 
     private static ?Component $component = null;
@@ -229,18 +233,7 @@ final class ComponentWasiTest extends TestCase
             exit($run('read') === 'forked' && $run('stream') === 'forked' ? 0 : 1);
         }
 
-        $deadline = microtime(true) + 20;
-        do {
-            if (pcntl_waitpid($pid, $status, WNOHANG) === $pid) {
-                self::assertSame(0, pcntl_wexitstatus($status));
-                return;
-            }
-            usleep(50_000);
-        } while (microtime(true) < $deadline);
-
-        posix_kill($pid, SIGKILL);
-        pcntl_waitpid($pid, $status);
-        self::fail('The forked child did not finish its WASI file reads within 20 seconds');
+        $this->assertChildExitsCleanly($pid, 'The forked child did not finish its WASI file reads');
     }
 
     public function test_a_link_error_does_not_use_up_the_wasi_object(): void

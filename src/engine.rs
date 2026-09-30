@@ -98,9 +98,27 @@ pub fn compile_in_process_pool<R: Send>(
 /// or timer waited forever when the parent had used WASI before forking. The
 /// runtime wasmtime-wasi finds entered on the current thread takes its place.
 pub fn wasi_runtime() -> tokio::runtime::Handle {
+    thread_local! {
+        static CACHED: std::cell::RefCell<Option<(u32, tokio::runtime::Handle)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let pid = std::process::id();
+    CACHED.with(|cached| {
+        let mut cached = cached.borrow_mut();
+        match cached.as_ref() {
+            Some((owner, handle)) if *owner == pid => handle.clone(),
+            _ => {
+                let handle = process_runtime(pid);
+                *cached = Some((pid, handle.clone()));
+                handle
+            }
+        }
+    })
+}
+
+fn process_runtime(pid: u32) -> tokio::runtime::Handle {
     static RUNTIME: Mutex<Option<(u32, tokio::runtime::Runtime)>> = Mutex::new(None);
 
-    let pid = std::process::id();
     let mut slot = RUNTIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
