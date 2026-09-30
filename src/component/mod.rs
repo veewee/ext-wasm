@@ -1,5 +1,6 @@
 //! WebAssembly components, the typed counterpart of core modules.
 
+pub mod error;
 pub mod exports;
 pub mod func;
 pub mod instance;

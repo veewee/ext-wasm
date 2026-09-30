@@ -4,7 +4,7 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
 use wasmtime::component::Val;
 
-use crate::component::value::{from_val, to_val};
+use crate::component::value::{to_val, unwrap_result};
 use crate::error::argument_count_error;
 use crate::store::SharedStore;
 use crate::throw::call_error;
@@ -48,7 +48,7 @@ impl Func {
                 return Err(call_error(&mut ctx, err));
             }
             match (results.first(), result_types.first()) {
-                (Some(val), Some(ty)) => Ok(from_val(val, ty)?),
+                (Some(val), Some(ty)) => unwrap_result(val, ty),
                 _ => Ok(Zval::null()),
             }
         })

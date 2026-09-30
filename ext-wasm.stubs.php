@@ -478,6 +478,79 @@ namespace Wasm\Component {
          */
         public function __construct(\Wasm\Component\Component $component, ?array $imports = null) {}
     }
+
+    /**
+     * A value of a WIT `result` inside another value: ok with a value, or err
+     * with a payload.
+     */
+    class Result {
+        /**
+         * Whether this is an ok result, as a property for var_dump() and assertEquals().
+         *
+         * @var bool
+         */
+        public readonly bool $ok;
+
+        /**
+         * The ok value or the err payload, as a property for var_dump() and assertEquals().
+         *
+         * @var mixed
+         */
+        public readonly mixed $payload = null;
+
+        public function __construct() {}
+
+        /**
+         * @param mixed $error
+         * @return \Wasm\Component\Result
+         */
+        public static function err(mixed $error = null): \Wasm\Component\Result {}
+
+        /**
+         * The err payload; throws for an ok result.
+         *
+         * @return mixed
+         */
+        public function error(): mixed {}
+
+        /**
+         * @return bool
+         */
+        public function isErr(): bool {}
+
+        /**
+         * @return bool
+         */
+        public function isOk(): bool {}
+
+        /**
+         * @param mixed $value
+         * @return \Wasm\Component\Result
+         */
+        public static function ok(mixed $value = null): \Wasm\Component\Result {}
+
+        /**
+         * The ok value; throws the err payload as a ComponentError.
+         *
+         * @return mixed
+         */
+        public function value(): mixed {}
+    }
+
+    /**
+     * A value of a WIT `variant`: the name of its case and the case's payload.
+     */
+    class Variant {
+        public readonly string $tag;
+
+        public readonly mixed $value = null;
+
+        /**
+         * @param string $tag
+         * @param mixed $value
+         */
+        public function __construct(string $tag, mixed $value = null) {}
+    }
 }
 
 namespace Wasm\Exception {
@@ -488,6 +561,22 @@ namespace Wasm\Exception {
          * @param mixed $previous
          */
         public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
+    }
+
+    /**
+     * The err of a component function whose own return type is a `result`.
+     *
+     * A PHP import throws it to return an err to the component.
+     *
+     * @property mixed $payload
+     */
+    class ComponentError extends \Wasm\Exception\WasmException {
+        public $payload = null;
+
+        /**
+         * @param mixed $payload
+         */
+        public function __construct(mixed $payload = null) {}
     }
 
     class LinkError extends \Wasm\Exception\WasmException {
