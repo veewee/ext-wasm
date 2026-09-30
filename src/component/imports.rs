@@ -101,6 +101,13 @@ pub fn link(
                 let mut classes: Vec<(String, HostImpl, Option<Rc<ResourceMeta>>)> = Vec::new();
                 for (export, item) in &declared {
                     if let ComponentItem::Resource(_) = item {
+                        if let Provided::Exports(_) = provided
+                            && provided.get(export).is_none()
+                        {
+                            return Err(link_error(format!(
+                                "the exported interface given for \"{name}\" has no resource \"{export}\""
+                            )));
+                        }
                         let (implementation, meta) = resource_impl(
                             store,
                             provided.get(export),

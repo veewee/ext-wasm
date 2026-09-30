@@ -10,6 +10,7 @@ use Wasm\Component\Exports;
 use Wasm\Component\Instance;
 use Wasm\Component\Resource;
 use Wasm\Exception\LinkError;
+use Wasm\Suspending;
 use Wasm\Wasi;
 
 /**
@@ -25,6 +26,44 @@ final class ComponentCompositionTest extends TestCase
     {
         return (new Instance(Component::fromFile(self::FIXTURES . 'counters.wasm'), wasi: new Wasi()))
             ->exports->get('docs:demo/counters');
+    }
+
+    /**
+     * An importer whose `go(n)` constructs a counter with `n`, declared as s32
+     * where the exporter takes u32; with `$later` it first passes `n` through
+     * a Suspending import.
+     */
+    private static function importer(Exports $counters, ?Suspending $later = null): Exports
+    {
+        $laterImport = $later ? '(import "later" (func $later (param "n" s32) (result s32)))
+            (core func $later-core (canon lower (func $later)))' : '';
+        $laterCoreImport = $later ? '(import "host" "later" (func $later (param i32) (result i32)))' : '';
+        $laterCall = $later ? '(local.set 0 (call $later (local.get 0)))' : '';
+        $laterExport = $later ? '(export "later" (func $later-core))' : '';
+        $wat = <<<WAT
+            (component
+              (import "docs:demo/counters@0.1.0" (instance \$cs
+                (export "counter" (type \$counter (sub resource)))
+                (export "[constructor]counter" (func (param "start" s32) (result (own \$counter))))))
+              (alias export \$cs "[constructor]counter" (func \$new))
+              (core func \$new-core (canon lower (func \$new)))
+              {$laterImport}
+              (core module \$m
+                (import "host" "new" (func \$new (param i32) (result i32)))
+                {$laterCoreImport}
+                (func (export "go") (param i32) (result i32)
+                  {$laterCall}
+                  (drop (call \$new (local.get 0)))
+                  (i32.const 7)))
+              (core instance \$i (instantiate \$m (with "host" (instance (export "new" (func \$new-core)) {$laterExport}))))
+              (func (export "go") (param "n" s32) (result u32) (canon lift (core func \$i "go"))))
+            WAT;
+        $imports = ['docs:demo/counters' => $counters];
+        if ($later) {
+            $imports['later'] = $later;
+        }
+
+        return (new Instance(new Component($wat), $imports))->exports;
     }
 
     private static function composer(mixed $counters): Exports
@@ -117,6 +156,41 @@ final class ComponentCompositionTest extends TestCase
 
         $this->expectExceptionMessage('expected a counter resource of the instance exporting it');
         $composer->peek($foreign);
+    }
+
+    public function test_an_error_of_the_exporter_reaches_php_with_its_message(): void
+    {
+        $importer = self::importer(self::counters());
+
+        self::assertSame(7, $importer->go(1));
+        $this->expectException(\ValueError::class);
+        $this->expectExceptionMessage('-1 is out of range for u32');
+        $importer->go(-1);
+    }
+
+    public function test_an_async_importer_calls_the_exporter_after_resuming(): void
+    {
+        $counters = self::counters();
+        $importer = self::importer($counters, new Suspending(fn (int $n): int => \Fiber::suspend() + $n));
+
+        $fiber = new \Fiber(fn (): int => $importer->go(1));
+        $fiber->start();
+        $fiber->resume(2);
+        self::assertSame(7, $fiber->getReturn());
+
+        $failing = new \Fiber(fn (): int => $importer->go(1));
+        $failing->start();
+        $this->expectExceptionMessage('-2 is out of range for u32');
+        $failing->resume(-3);
+    }
+
+    public function test_exports_without_the_resource_are_a_link_error_naming_it(): void
+    {
+        $instance = new Instance(Component::fromFile(self::FIXTURES . 'counters.wasm'), wasi: new Wasi());
+
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('the exported interface given for "docs:demo/counters@0.1.0" has no resource "counter"');
+        self::composer($instance->exports);
     }
 
     public function test_an_interface_missing_a_function_is_a_link_error(): void
