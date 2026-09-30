@@ -74,4 +74,6 @@ jobs:
         with:
           php: '8.4'
       - run: phpize && ./configure && make
-      - run: php -d extension=$PWD/modules/wasm.so -r 'exit(extension_loaded("wasm") ? 0 : 1);'
+      - name: Load the built module
+        run: |
+          php -d "extension=$PWD/modules/wasm.so" -r 'exit(extension_loaded("wasm") ? 0 : 1);'
