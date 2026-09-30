@@ -179,10 +179,21 @@ impl WasiHttpHooks for Hooks {
             return Box::new(async { Err(Error::HttpRequestDenied) });
         }
         let options = self.capped(options);
+        // wasmtime-wasi-http puts no timeout on the TLS handshake, so the
+        // whole setup until the response headers is bounded by the connect
+        // and first-byte timeouts together.
+        let setup = options
+            .and_then(|options| Some(options.connect_timeout? + options.first_byte_timeout?));
         Box::new(async move {
             use http_body_util::BodyExt;
 
-            let (response, io) = wasmtime_wasi_http::default_send_request(request, options).await?;
+            let sending = wasmtime_wasi_http::default_send_request(request, options);
+            let (response, io) = match setup {
+                Some(limit) => tokio::time::timeout(limit, sending)
+                    .await
+                    .map_err(|_| Error::ConnectionTimeout)??,
+                None => sending.await?,
+            };
             Ok((
                 response.map(BodyExt::boxed_unsync),
                 Box::new(io) as ErrorFuture,

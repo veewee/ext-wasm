@@ -30,9 +30,7 @@ final class ComponentHttpTest extends TestCase
 
     public static function setUpBeforeClass(): void
     {
-        $probe = stream_socket_server('tcp://127.0.0.1:0');
-        self::$port = (int) substr(strrchr(stream_socket_get_name($probe, false), ':'), 1);
-        fclose($probe);
+        self::$port = self::freePort();
         self::$log = tempnam(sys_get_temp_dir(), 'wasm-http-log');
         self::$server = proc_open(
             [PHP_BINARY, '-n', '-S', '127.0.0.1:' . self::$port, __DIR__ . '/fixtures/http-server.php'],
@@ -41,10 +39,24 @@ final class ComponentHttpTest extends TestCase
             null,
             ['HTTP_TEST_LOG' => self::$log],
         );
+        self::waitForPort(self::$port);
+    }
+
+    private static function freePort(): int
+    {
+        $probe = stream_socket_server('tcp://127.0.0.1:0');
+        $port = (int) substr(strrchr(stream_socket_get_name($probe, false), ':'), 1);
+        fclose($probe);
+
+        return $port;
+    }
+
+    private static function waitForPort(int $port): void
+    {
         $deadline = microtime(true) + 10;
-        while (@fsockopen('127.0.0.1', self::$port) === false) {
+        while (@fsockopen('127.0.0.1', $port) === false) {
             if (microtime(true) > $deadline) {
-                self::fail('the test HTTP server did not start');
+                self::fail("the test server on port $port did not start");
             }
             usleep(50_000);
         }
@@ -169,5 +181,28 @@ final class ComponentHttpTest extends TestCase
         }
 
         $this->assertChildExitsCleanly($pid, 'The forked child did not finish its HTTP request');
+    }
+
+    public function test_a_tls_handshake_that_never_completes_times_out(): void
+    {
+        $port = self::freePort();
+        $server = proc_open(
+            [PHP_BINARY, '-n', __DIR__ . '/fixtures/stalling-server.php', (string) $port],
+            [0 => ['pipe', 'r'], 1 => ['file', self::nullDevice(), 'w'], 2 => ['file', self::nullDevice(), 'w']],
+            $pipes,
+        );
+        self::waitForPort($port);
+        $previous = ini_set('default_socket_timeout', '1');
+        try {
+            $started = microtime(true);
+            $output = self::get("https://127.0.0.1:$port/", ['127.0.0.1']);
+        } finally {
+            ini_set('default_socket_timeout', (string) $previous);
+            proc_terminate($server);
+            proc_close($server);
+        }
+
+        self::assertSame('error: ErrorCode::ConnectionTimeout', $output);
+        self::assertLessThan(5, microtime(true) - $started);
     }
 }
