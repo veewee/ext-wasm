@@ -120,6 +120,31 @@ $table->set(0, $math->exports->double);
 
 `Memory`, `Table`, `GlobalVar`, `Tag` and `Instance` all accept `store:`. A store lives as long as any object in it or a `Wasm\Store` object for it. JS has no stores and lets any objects be combined.
 
+### WASI
+
+`Wasm\Wasi` runs modules built for WASI preview1, the system interface most wasm programs outside the browser use. Its shape follows Node's `WASI` class:
+
+```php
+$wasi = new Wasm\Wasi(
+    args: ['python', '-c', 'import sys; print(sys.stdin.read().upper())'],
+    env: ['LANG' => 'C'],
+    stdin: 'hello',
+    preopens: ['/data' => '/srv/app/data'],
+);
+$instance = new Wasm\Instance($module, $wasi->getImportObject());
+$exitCode = $wasi->start($instance);   // runs _start
+$wasi->stdout();                       // "HELLO\n"
+$wasi->stderr();
+```
+
+A module sees nothing of the host except what you pass: no environment variables, no stdio of the PHP process and no files outside the preopened directories. Preopens map a path inside the module to a host directory and are read-only unless you pass `['path' => '/srv/out', 'writable' => true]`.
+
+stdout and stderr are captured and read after the run, up to `outputLimit` bytes each (16 MiB by default). A program that writes more gets an I/O error, and `start()` throws a `RuntimeError` afterwards. `start()` returns the exit code, also when the program calls `exit()`.
+
+Modules that work as a library export `_initialize` instead of `_start`. Call `$wasi->initialize($instance)` once and then use the exports as usual. Such an export calling `exit()` throws a `RuntimeError`.
+
+`getImportObject()` returns the WASI functions under `wasi_snapshot_preview1`, so you can combine them with imports of your own: `[...$wasi->getImportObject(), 'env' => [...]]`. A `Wasi` object belongs to one run of one module; create a new one for the next run.
+
 ### Values
 
 | Wasm type | From PHP | To PHP |
@@ -144,10 +169,11 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and two larger ones:
+The [examples](examples) folder has small scripts for each feature, and three larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
+- [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
 
 ## Compilation cache
 
@@ -168,7 +194,7 @@ The cache holds machine code that runs inside the PHP process, so anyone who can
 - wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance, or an object the instance imports, keeps that instance and its store alive until the PHP process ends.
 - A PHP callback cannot switch fibers while wasm waits for it: `Fiber::suspend()` inside a callback throws a `FiberError`. Calling wasm from inside a fiber, and suspending between calls, works as usual.
-- WASI is not supported yet.
+- WASI support covers preview1, not preview2 and the component model. A WASI program that waits on a file and a timer at once in a forked child has not been tested and might hang.
 
 ## Development
 

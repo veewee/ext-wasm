@@ -82,6 +82,19 @@ jobs:
       - name: Check a frame was drawn
         run: test "$(head -c 2 title.ppm)" = P6
 
+  python:
+    name: Python example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          php: '8.4'
+      - run: cargo build --release --locked
+      - run: examples/python/download.sh
+      - name: Run Python code
+        run: test "$(php -d "extension=$PWD/target/release/libwasm.so" examples/python/run.php 'print(6*7)' < /dev/null)" = 42
+
   lint:
     name: Clippy and rustfmt
     runs-on: ubuntu-latest
