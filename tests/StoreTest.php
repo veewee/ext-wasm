@@ -153,4 +153,59 @@ final class StoreTest extends TestCase
         self::assertSame($memory, $table->get(0));
         self::assertSame($memory, $global->value);
     }
+
+    public function test_instances_without_shared_imports_do_not_share_a_store(): void
+    {
+        $math = new Instance(new Module(self::MATH));
+        $id = new Instance(new Module('(module (func (export "id") (param funcref) (result funcref) local.get 0))'));
+
+        $this->expectException(\Wasm\Exception\LinkError::class);
+        $this->expectExceptionMessageMatches('/different store/');
+        $id->exports->id($math->exports->double);
+    }
+
+    public function test_memory_stays_flat_when_one_instance_is_kept_alive(): void
+    {
+        $output = $this->runPhp(<<<'PHP'
+            <?php
+            $usage = getrusage();
+            if (!isset($usage['ru_maxrss'])) { echo 'skip'; exit; }
+            $unit = PHP_OS_FAMILY === 'Darwin' ? 1048576 : 1024;
+            $module = new Wasm\Module('(module (memory (export "memory") 16))');
+            $kept = new Wasm\Instance($module);
+            $before = getrusage()['ru_maxrss'] / $unit;
+            for ($i = 0; $i < 300; $i++) {
+                $instance = new Wasm\Instance($module);
+                $instance->exports->memory->write(0, str_repeat("\1", 1048576));
+                unset($instance);
+            }
+            echo (int) (getrusage()['ru_maxrss'] / $unit - $before);
+            PHP);
+
+        if ($output === 'skip') {
+            self::markTestSkipped('peak RSS is not available on this platform');
+        }
+        // 300 kept stores of 1 MiB each would grow by about 300 MiB.
+        self::assertLessThan(100, (int) $output, "peak RSS grew by {$output} MiB");
+    }
+
+    public function test_an_explicit_store_is_freed_with_its_objects(): void
+    {
+        $output = $this->runPhp(<<<'PHP'
+            <?php
+            $unit = PHP_OS_FAMILY === 'Darwin' ? 1048576 : 1024;
+            $module = new Wasm\Module('(module (memory (export "memory") 16))');
+            $kept = new Wasm\Instance($module);
+            $before = getrusage()['ru_maxrss'] / $unit;
+            for ($i = 0; $i < 300; $i++) {
+                $store = new Wasm\Store();
+                $instance = new Wasm\Instance($module, store: $store);
+                $instance->exports->memory->write(0, str_repeat("\1", 1048576));
+                unset($instance, $store);
+            }
+            echo (int) (getrusage()['ru_maxrss'] / $unit - $before);
+            PHP);
+
+        self::assertLessThan(100, (int) $output, "peak RSS grew by {$output} MiB");
+    }
 }

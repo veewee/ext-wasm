@@ -120,12 +120,12 @@ impl Values {
     }
 }
 
-/// The wasmtime store shared by every wasm object on this PHP thread.
+/// A wasmtime store and the PHP objects that share it.
 ///
-/// JS lets any Memory, Global, Table or function be combined with any instance,
-/// while wasmtime requires them to live in one store. Every PHP wrapper holds an
-/// `Rc` to this handle, so the store lives exactly as long as some wasm object
-/// does.
+/// wasmtime frees instances only together with their store, so every object
+/// gets its own store unless it is combined with others: see `choose`. Every
+/// PHP wrapper holds an `Rc` to this handle, so the store lives exactly as long
+/// as some wasm object in it does.
 pub struct StoreHandle {
     store: RefCell<Store<HostState>>,
     /// The caller of the host function that is currently running PHP code.
@@ -134,10 +134,6 @@ pub struct StoreHandle {
     /// callback that touches any wasm object (calling another export, reading
     /// memory) must go through the caller wasmtime handed to the host function.
     active: Cell<*mut Caller<'static, HostState>>,
-}
-
-thread_local! {
-    static CURRENT: RefCell<Weak<StoreHandle>> = const { RefCell::new(Weak::new()) };
 }
 
 pub type SharedStore = Rc<StoreHandle>;
@@ -153,17 +149,6 @@ pub fn new() -> SharedStore {
             },
         )),
         active: Cell::new(std::ptr::null_mut()),
-    })
-}
-
-pub fn current() -> SharedStore {
-    CURRENT.with(|current| {
-        if let Some(handle) = current.borrow().upgrade() {
-            return handle;
-        }
-        let handle = new();
-        *current.borrow_mut() = Rc::downgrade(&handle);
-        handle
     })
 }
 
@@ -210,7 +195,7 @@ pub fn choose(
             Some(_) => return Err(mismatch(kind)),
         }
     }
-    Ok(chosen.unwrap_or_else(current))
+    Ok(chosen.unwrap_or_else(new))
 }
 
 /// Whether `store` is the store `ctx` belongs to.

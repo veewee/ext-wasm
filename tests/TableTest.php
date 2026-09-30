@@ -9,6 +9,7 @@ use Wasm\Exception\RuntimeError;
 use Wasm\Func;
 use Wasm\Instance;
 use Wasm\Module;
+use Wasm\Store;
 use Wasm\Table;
 
 final class TableTest extends TestCase
@@ -76,12 +77,14 @@ final class TableTest extends TestCase
 
     public function test_wasm_calls_funcs_placed_in_an_imported_table(): void
     {
+        // The table and $math are combined only through set(), so they need one store.
+        $store = new Store();
         $math = (new Instance(new Module(<<<'EOWAT'
             (module
               (func (export "double") (param i32) (result i32) (i32.mul (local.get 0) (i32.const 2)))
               (func (export "square") (param i32) (result i32) (i32.mul (local.get 0) (local.get 0))))
-            EOWAT)))->exports;
-        $table = new Table(['element' => 'anyfunc', 'initial' => 2]);
+            EOWAT), store: $store))->exports;
+        $table = new Table(['element' => 'anyfunc', 'initial' => 2], store: $store);
         $table->set(0, $math->double);
         $table->set(1, $math->square);
 
