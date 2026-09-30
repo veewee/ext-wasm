@@ -22,6 +22,13 @@ final class WasiTest extends TestCase
           (call $write (i32.const 1) (i32.const 1024) (call $read (i32.load (i32.const 12)) (i32.const 1024) (i32.const 1024))))
         EOWAT;
 
+    private const REACTOR = <<<'EOWAT'
+        (global $ready (mut i32) (i32.const 0))
+        (func (export "_initialize") (global.set $ready (i32.const 42)))
+        (func (export "answer") (result i32) (global.get $ready))
+        (func (export "quit") (call $proc_exit (i32.const 7)))
+        EOWAT;
+
     private const CREATE_AND_WRITE = <<<'EOWAT'
         (data (i32.const 512) "out.txt")
         (data (i32.const 1024) "made")
@@ -179,6 +186,68 @@ final class WasiTest extends TestCase
     {
         $this->expectException(\ValueError::class);
         new Wasi(preopens: ['/data' => sys_get_temp_dir() . '/does-not-exist-' . uniqid()]);
+    }
+
+    public function test_initialize_runs_the_reactor_setup(): void
+    {
+        $wasi = new Wasi();
+        $instance = $this->instance($wasi, self::REACTOR);
+        $wasi->initialize($instance);
+
+        self::assertSame(42, $instance->exports->answer());
+    }
+
+    public function test_initialize_without_an_initialize_export_does_nothing(): void
+    {
+        $wasi = new Wasi();
+        $instance = $this->instance($wasi, '(func (export "answer") (result i32) (i32.const 1))');
+        $wasi->initialize($instance);
+
+        self::assertSame(1, $instance->exports->answer());
+    }
+
+    public function test_proc_exit_in_an_export_is_a_runtime_error(): void
+    {
+        $wasi = new Wasi();
+        $instance = $this->instance($wasi, self::REACTOR);
+
+        $this->expectException(\Wasm\Exception\RuntimeError::class);
+        $this->expectExceptionMessage('wasm program exited with code 7');
+        $instance->exports->quit();
+    }
+
+    public function test_a_wasi_object_runs_once(): void
+    {
+        $wasi = new Wasi();
+        $instance = $this->instance($wasi, '(func (export "_start"))');
+        $wasi->start($instance);
+
+        $this->expectException(\Error::class);
+        $this->expectExceptionMessageMatches('/once/');
+        $wasi->start($instance);
+    }
+
+    public function test_an_instance_of_another_store_is_a_link_error(): void
+    {
+        $wasi = new Wasi();
+        $other = new Wasi();
+
+        $this->expectException(\Wasm\Exception\LinkError::class);
+        $wasi->start($this->instance($other, '(func (export "_start"))'));
+    }
+
+    public function test_a_missing_start_is_a_type_error_and_leaves_the_wasi_usable(): void
+    {
+        $wasi = new Wasi();
+        $instance = $this->instance($wasi, self::REACTOR);
+
+        try {
+            $wasi->start($instance);
+            self::fail('Expected a TypeError');
+        } catch (\TypeError) {
+        }
+        $wasi->initialize($instance);
+        self::assertSame(42, $instance->exports->answer());
     }
 
     public static function tempDir(): string

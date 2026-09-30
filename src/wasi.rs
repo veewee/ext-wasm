@@ -156,6 +156,21 @@ impl Wasi {
         Ok(code)
     }
 
+    /// Runs `_initialize` when the module exports it, for modules used as a library.
+    // Renamed in Rust because the class macro generates an `initialize` of its own.
+    #[php(name = "initialize")]
+    pub fn initialize_reactor(&self, instance: &Instance) -> PhpResult<()> {
+        let entry = self.entry(instance, "_initialize")?;
+        self.used.set(true);
+        let Some(func) = entry else {
+            return Ok(());
+        };
+        self.store.with(|mut ctx| {
+            func.call(&mut ctx, &[], &mut [])
+                .map_err(|err| call_error(&mut ctx, err))
+        })
+    }
+
     pub fn stdout(&self) -> Binary<u8> {
         self.captured(&self.stdout)
     }

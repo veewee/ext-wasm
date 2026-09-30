@@ -290,6 +290,14 @@ namespace Wasm {
         public function getImportObject(): array {}
 
         /**
+         * Runs `_initialize` when the module exports it, for modules used as a library.
+         *
+         * @param \Wasm\Instance $instance
+         * @return void
+         */
+        public function initialize(\Wasm\Instance $instance): void {}
+
+        /**
          * Runs `_start` and returns the exit code.
          *
          * @param \Wasm\Instance $instance
