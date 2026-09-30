@@ -2,10 +2,10 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
-use wasmtime::{GlobalType, Mutability, Val, ValType};
+use wasmtime::{GlobalType, Mutability, StoreContextMut, Val, ValType};
 
 use crate::error::{error, link_error, type_error};
-use crate::store::{self, SharedStore};
+use crate::store::{self, HostState, SharedStore};
 use crate::value::{default_val, descriptor_bool, descriptor_str, from_val, parse_val_type, to_val};
 
 /// A wasm global, like JS `WebAssembly.Global`. Named GlobalVar because
@@ -28,12 +28,14 @@ impl GlobalVar {
             .ok_or_else(|| type_error("descriptor \"value\" is required"))?;
         let ty = parse_val_type(ty)?;
         let mutability = if descriptor_bool(descriptor, "mutable")? { Mutability::Var } else { Mutability::Const };
-        let initial = match value {
-            Some(value) if !value.is_null() => to_val(value, &ty)?,
-            _ => default_val(&ty),
-        };
         let store = store::current();
-        let inner = new_global(&store, ty, mutability, initial)?;
+        let inner = store.with(|mut ctx| {
+            let initial = match value {
+                Some(value) if !value.is_null() => to_val(&mut ctx, value, &ty)?,
+                _ => default_val(&ty),
+            };
+            new_global(&mut ctx, ty, mutability, initial)
+        })?;
         Ok(Self { store, inner })
     }
 
@@ -49,7 +51,7 @@ impl GlobalVar {
             if ty.mutability() == Mutability::Const {
                 return Err(type_error("cannot set the value of an immutable global"));
             }
-            let val = to_val(value, ty.content())?;
+            let val = to_val(&mut ctx, value, ty.content())?;
             self.inner.set(&mut ctx, val).map_err(|err| type_error(format!("{err:#}")))
         })
     }
@@ -59,7 +61,10 @@ impl GlobalVar {
     }
 
     pub fn value_of(&self) -> PhpResult<Zval> {
-        Ok(self.store.with(|mut ctx| from_val(&self.inner.get(&mut ctx)))?)
+        Ok(self.store.with(|mut ctx| {
+            let val = self.inner.get(&mut ctx);
+            from_val(&mut ctx, &val)
+        })?)
     }
 }
 
@@ -68,8 +73,11 @@ fn property(name: &str) -> PhpResult<()> {
     if name == "value" { Ok(()) } else { Err(error(format!("undefined property GlobalVar::${name}"))) }
 }
 
-pub fn new_global(store: &SharedStore, ty: ValType, mutability: Mutability, value: Val) -> PhpResult<wasmtime::Global> {
-    store.with(|mut ctx| {
-        wasmtime::Global::new(&mut ctx, GlobalType::new(ty, mutability), value).map_err(link_error)
-    })
+pub fn new_global(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    ty: ValType,
+    mutability: Mutability,
+    value: Val,
+) -> PhpResult<wasmtime::Global> {
+    wasmtime::Global::new(ctx, GlobalType::new(ty, mutability), value).map_err(link_error)
 }

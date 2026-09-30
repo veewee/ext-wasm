@@ -7,7 +7,7 @@ use crate::value::{debug_type, from_val, to_val};
 
 /// Wraps a PHP callable as a wasm function of type `ty`.
 pub fn host_func(mut ctx: impl AsContextMut<Data = HostState>, ty: FuncType, callable: &Zval) -> wasmtime::Func {
-    let key = ctx.as_context_mut().data_mut().values.insert(callable.shallow_clone());
+    let key = ctx.as_context_mut().data_mut().values.insert_permanent(callable.shallow_clone());
     let result_types: Vec<ValType> = ty.results().collect();
     wasmtime::Func::new(ctx, ty, move |mut caller, params, results| {
         invoke(&mut caller, key, &result_types, params, results)
@@ -22,7 +22,10 @@ fn invoke(
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
     let callable = caller.data().values.get(key).shallow_clone();
-    let args = params.iter().map(from_val).collect::<Result<Vec<Zval>, _>>()?;
+    let args = {
+        let mut ctx = caller.as_context_mut();
+        params.iter().map(|param| from_val(&mut ctx, param)).collect::<Result<Vec<Zval>, _>>()?
+    };
 
     let returned = store::current().enter_host(caller, || {
         let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
@@ -32,15 +35,16 @@ fn invoke(
     // PHP entry point that started the call rethrows it unchanged.
     let returned = returned.map_err(|err| wasmtime::Error::msg(format!("PHP callback failed: {err}")))?;
 
+    let mut ctx = caller.as_context_mut();
     match result_types {
         [] => {}
-        [ty] => results[0] = to_val(&returned, ty)?,
+        [ty] => results[0] = to_val(&mut ctx, &returned, ty)?,
         types => {
             let list = returned.array().filter(|list| list.len() == types.len()).ok_or_else(|| {
                 wasmtime::Error::msg(format!("expected a list of {} results, got {}", types.len(), debug_type(&returned)))
             })?;
             for ((slot, ty), value) in results.iter_mut().zip(types).zip(list.values()) {
-                *slot = to_val(value, ty)?;
+                *slot = to_val(&mut ctx, value, ty)?;
             }
         }
     }

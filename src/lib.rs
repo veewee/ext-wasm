@@ -11,6 +11,7 @@ mod instance;
 mod memory;
 mod module;
 mod store;
+mod table;
 mod value;
 
 use ext_php_rs::prelude::*;
@@ -37,6 +38,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<func::Func>()
         .class::<global::GlobalVar>()
         .class::<memory::Memory>()
+        .class::<table::Table>()
         .class::<exports::Exports>()
         .class::<instance::Instance>()
 }

@@ -7,6 +7,7 @@ use crate::error::link_error;
 use crate::func::Func;
 use crate::global::{new_global, GlobalVar};
 use crate::memory::Memory;
+use crate::table::Table;
 use crate::store::SharedStore;
 use crate::value::{debug_type, downcast, to_val};
 
@@ -33,6 +34,9 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
     if let Some(memory) = downcast::<Memory>(value) {
         return Ok(memory.inner.into());
     }
+    if let Some(table) = downcast::<Table>(value) {
+        return Ok(table.inner.into());
+    }
     if let Some(func) = downcast::<Func>(value) {
         return Ok(func.inner.into());
     }
@@ -40,8 +44,10 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
         ExternType::Func(ty) if value.is_callable() => Ok(store.with(|ctx| host_func(ctx, ty, value)).into()),
         // JS accepts a plain number for an immutable global import.
         ExternType::Global(ty) if ty.mutability() == Mutability::Const && !value.is_object() => {
-            let val = to_val(value, ty.content()).map_err(|_| mismatch(import, value))?;
-            Ok(new_global(store, ty.content().clone(), Mutability::Const, val)?.into())
+            store.with(|mut ctx| {
+                let val = to_val(&mut ctx, value, ty.content()).map_err(|_| mismatch(import, value))?;
+                Ok(new_global(&mut ctx, ty.content().clone(), Mutability::Const, val)?.into())
+            })
         }
         _ => Err(mismatch(import, value)),
     }

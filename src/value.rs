@@ -4,9 +4,11 @@ use ext_php_rs::types::{ZendHashTable, Zval};
 use ext_php_rs::class::RegisteredClass;
 use ext_php_rs::convert::{FromZval, IntoZval};
 use ext_php_rs::types::ZendClassObject;
-use wasmtime::{Val, ValType};
+use wasmtime::{ExternRef, HeapTopType, HeapType, Ref, RefType, StoreContextMut, Val, ValType};
 
 use crate::error::{type_error, value_error};
+use crate::func::Func;
+use crate::store::{self, HostState, ValueKey};
 
 /// A conversion failure, kept separate from `PhpException` so host functions
 /// can turn it into a trap message instead of a thrown PHP exception.
@@ -39,7 +41,7 @@ impl From<ConvertError> for PhpException {
 ///
 /// Stricter than JS on purpose: JS coerces anything with ToNumber, which turns
 /// typos like `'1'` or `1.5` for an i32 into silent bugs.
-pub fn to_val(value: &Zval, ty: &ValType) -> Result<Val, ConvertError> {
+pub fn to_val(ctx: &mut StoreContextMut<'_, HostState>, value: &Zval, ty: &ValType) -> Result<Val, ConvertError> {
     Ok(match ty {
         ValType::I32 => {
             let n = expect_int(value, ty)?;
@@ -52,31 +54,82 @@ pub fn to_val(value: &Zval, ty: &ValType) -> Result<Val, ConvertError> {
         ValType::I64 => Val::I64(expect_int(value, ty)?),
         ValType::F32 => Val::F32((expect_float(value, ty)? as f32).to_bits()),
         ValType::F64 => Val::F64(expect_float(value, ty)?.to_bits()),
-        other => return Err(ConvertError::Type(format!("unsupported wasm type {other}"))),
+        ValType::V128 => {
+            let bytes: [u8; 16] = value
+                .zend_str()
+                .and_then(|bytes| bytes.as_bytes().try_into().ok())
+                .ok_or_else(|| ConvertError::Type(format!("expected a 16 byte string for v128, got {}", debug_type(value))))?;
+            Val::V128(u128::from_le_bytes(bytes).into())
+        }
+        ValType::Ref(ref_type) => to_ref(ctx, value, ref_type)?.into(),
     })
 }
 
-pub fn from_val(val: &Val) -> Result<Zval, ConvertError> {
+pub fn to_ref(ctx: &mut StoreContextMut<'_, HostState>, value: &Zval, ty: &RefType) -> Result<Ref, ConvertError> {
+    if value.is_null() && ty.is_nullable() {
+        return Ok(match ty.heap_type().top() {
+            HeapTopType::Func => Ref::Func(None),
+            HeapTopType::Extern => Ref::Extern(None),
+            _ => return Err(ConvertError::Type(format!("unsupported wasm type {ty}"))),
+        });
+    }
+    match ty.heap_type() {
+        HeapType::Extern => {
+            let key = ctx.data_mut().values.insert_ref(value.shallow_clone());
+            let externref = ExternRef::new(&mut *ctx, key).map_err(|err| ConvertError::Value(format!("{err:#}")))?;
+            Ok(Ref::Extern(Some(externref)))
+        }
+        HeapType::Func => downcast::<Func>(value)
+            .map(|func| Ref::Func(Some(func.inner)))
+            .ok_or_else(|| ConvertError::Type(format!("expected Wasm\\Func or null for {ty}, got {}", debug_type(value)))),
+        _ => Err(ConvertError::Type(format!("unsupported wasm type {ty}"))),
+    }
+}
+
+pub fn from_val(ctx: &mut StoreContextMut<'_, HostState>, val: &Val) -> Result<Zval, ConvertError> {
     let mut zval = Zval::new();
     match val {
         Val::I32(n) => zval.set_long(*n),
         Val::I64(n) => zval.set_long(*n),
         Val::F32(bits) => zval.set_double(f32::from_bits(*bits)),
         Val::F64(bits) => zval.set_double(f64::from_bits(*bits)),
+        Val::V128(v) => zval.set_binary(v.as_u128().to_le_bytes().to_vec()),
+        Val::FuncRef(func) => return from_ref(ctx, &Ref::Func(*func)),
+        Val::ExternRef(externref) => return from_ref(ctx, &Ref::Extern(*externref)),
         other => return Err(ConvertError::Type(format!("unsupported wasm value {other:?}"))),
     }
     Ok(zval)
 }
 
+pub fn from_ref(ctx: &mut StoreContextMut<'_, HostState>, value: &Ref) -> Result<Zval, ConvertError> {
+    match value {
+        Ref::Func(None) | Ref::Extern(None) => Ok(Zval::null()),
+        Ref::Func(Some(inner)) => Func { store: store::current(), inner: *inner }
+            .into_zval(false)
+            .map_err(|err| ConvertError::Value(err.to_string())),
+        Ref::Extern(Some(externref)) => {
+            let key = externref
+                .data(&*ctx)
+                .ok()
+                .flatten()
+                .and_then(|data| data.downcast_ref::<ValueKey>())
+                .map(ValueKey::key)
+                .ok_or_else(|| ConvertError::Type("externref does not hold a PHP value".into()))?;
+            Ok(ctx.data().values.get(key).shallow_clone())
+        }
+        other => Err(ConvertError::Type(format!("unsupported wasm reference {other:?}"))),
+    }
+}
+
 /// JS semantics: no result is `null`, one result is the value, several are a list.
-pub fn results_to_zval(results: &[Val]) -> PhpResult<Zval> {
+pub fn results_to_zval(ctx: &mut StoreContextMut<'_, HostState>, results: &[Val]) -> PhpResult<Zval> {
     match results {
         [] => Ok(Zval::null()),
-        [single] => Ok(from_val(single)?),
+        [single] => Ok(from_val(ctx, single)?),
         many => {
             let mut list = ZendHashTable::new();
             for val in many {
-                list.push(from_val(val)?)?;
+                list.push(from_val(ctx, val)?)?;
             }
             Ok(list.into_zval(false)?)
         }
@@ -125,6 +178,9 @@ pub fn parse_val_type(name: &str) -> PhpResult<ValType> {
         "i64" => ValType::I64,
         "f32" => ValType::F32,
         "f64" => ValType::F64,
+        "v128" => ValType::V128,
+        "externref" => ValType::EXTERNREF,
+        "anyfunc" | "funcref" => ValType::FUNCREF,
         other => return Err(type_error(format!("unknown wasm value type \"{other}\""))),
     })
 }

@@ -182,6 +182,46 @@ namespace Wasm {
          */
         public function __construct(string $bytes) {}
     }
+
+    /**
+     * A table of references, like JS `WebAssembly.Table`.
+     */
+    class Table {
+        /**
+         * @param array{element: 'anyfunc'|'externref', initial: int, maximum?: int} $descriptor
+         *
+         * @param array $descriptor
+         * @param mixed $value
+         */
+        public function __construct(array $descriptor, mixed $value = null) {}
+
+        /**
+         * @param int $index
+         * @return mixed
+         */
+        public function get(int $index): mixed {}
+
+        /**
+         * Grows the table by `delta` entries and returns the previous length.
+         *
+         * @param int $delta
+         * @param mixed $value
+         * @return int
+         */
+        public function grow(int $delta, mixed $value = null): int {}
+
+        /**
+         * @return int
+         */
+        public function length(): int {}
+
+        /**
+         * @param int $index
+         * @param mixed $value
+         * @return void
+         */
+        public function set(int $index, mixed $value = null): void {}
+    }
 }
 
 namespace Wasm\Exception {

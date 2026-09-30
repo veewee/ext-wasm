@@ -1,30 +1,94 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex};
 
 use ext_php_rs::types::Zval;
-use wasmtime::{AsContextMut, Caller, Store, StoreContextMut};
+use wasmtime::{AsContextMut, Caller, RootScope, Store, StoreContextMut};
 
 use crate::engine::engine;
 
 #[derive(Default)]
 pub struct HostState {
-    /// PHP values referenced from wasm (callables behind host functions).
-    /// wasmtime requires host closures to be Send + Sync and Zval is neither,
-    /// so closures capture a key into this list instead of the value.
     pub values: Values,
 }
 
+/// PHP values referenced from wasm: callables behind host functions and
+/// externref payloads.
+///
+/// wasmtime requires host closures and externref payloads to be Send + Sync and
+/// Zval is neither, so wasm only ever holds a key into this list.
 #[derive(Default)]
-pub struct Values(Vec<Zval>);
+pub struct Values {
+    slots: Vec<Option<Zval>>,
+    /// Keys whose externref was collected by wasmtime's GC. The payload's Drop
+    /// runs inside the GC, where the store data is out of reach.
+    freed: Arc<Mutex<Vec<usize>>>,
+    /// Slots taken from `freed` and ready for reuse.
+    vacant: Vec<usize>,
+    /// Zvals released from collected slots, dropped outside the store borrow
+    /// because a PHP destructor may touch wasm objects again.
+    released: Vec<Zval>,
+    gc_threshold: usize,
+}
+
+/// The externref payload: a key that releases its slot when wasm drops the reference.
+pub struct ValueKey {
+    key: usize,
+    freed: Arc<Mutex<Vec<usize>>>,
+}
+
+impl Drop for ValueKey {
+    fn drop(&mut self) {
+        if let Ok(mut freed) = self.freed.lock() {
+            freed.push(self.key);
+        }
+    }
+}
+
+impl ValueKey {
+    pub fn key(&self) -> usize {
+        self.key
+    }
+}
 
 impl Values {
-    pub fn insert(&mut self, value: Zval) -> usize {
-        self.0.push(value);
-        self.0.len() - 1
+    /// Stores a value for the lifetime of the store (host function callables).
+    pub fn insert_permanent(&mut self, value: Zval) -> usize {
+        self.insert(value)
+    }
+
+    /// Stores a value until wasm drops the returned key.
+    pub fn insert_ref(&mut self, value: Zval) -> ValueKey {
+        ValueKey { key: self.insert(value), freed: self.freed.clone() }
     }
 
     pub fn get(&self, key: usize) -> &Zval {
-        &self.0[key]
+        self.slots[key].as_ref().expect("wasm only holds keys of live values")
+    }
+
+    fn insert(&mut self, value: Zval) -> usize {
+        self.reclaim();
+        if let Some(key) = self.vacant.pop() {
+            self.slots[key] = Some(value);
+            key
+        } else {
+            self.slots.push(Some(value));
+            self.slots.len() - 1
+        }
+    }
+
+    fn reclaim(&mut self) {
+        let freed = self.freed.lock().map(|mut freed| std::mem::take(&mut *freed)).unwrap_or_default();
+        for key in freed {
+            if let Some(value) = self.slots[key].take() {
+                self.released.push(value);
+            }
+            self.vacant.push(key);
+        }
+    }
+
+    fn live(&self) -> usize {
+        self.slots.len() - self.vacant.len()
     }
 }
 
@@ -64,18 +128,30 @@ pub fn current() -> SharedStore {
     })
 }
 
+const MIN_GC_THRESHOLD: usize = 1024;
+
 impl StoreHandle {
+    /// Runs `f` with the store. Every GC root created inside `f` is released
+    /// when it returns, so PHP values held by wasm only stay alive as long as
+    /// wasm itself references them.
     pub fn with<R>(&self, f: impl FnOnce(StoreContextMut<'_, HostState>) -> R) -> R {
         let active = self.active.get();
-        if active.is_null() {
-            f(self.store.borrow_mut().as_context_mut())
-        } else {
+        if !active.is_null() {
             // SAFETY: `active` is only non-null inside `enter_host`, which keeps
             // the caller alive for the duration and restores the previous value
             // before returning. No other reference to the store exists meanwhile:
             // the outer borrow is parked inside wasmtime's call.
-            f(unsafe { &mut *active }.as_context_mut())
+            let mut scope = RootScope::new(unsafe { &mut *active });
+            return f(scope.as_context_mut());
         }
+
+        let result = {
+            let mut store = self.store.borrow_mut();
+            let mut scope = RootScope::new(&mut *store);
+            f(scope.as_context_mut())
+        };
+        drop(self.collect());
+        result
     }
 
     /// Runs PHP code from inside a host function, routing store access through `caller`.
@@ -83,6 +159,20 @@ impl StoreHandle {
         let previous = self.active.replace((caller as *mut Caller<'_, HostState>).cast());
         let _restore = Restore(&self.active, previous);
         f()
+    }
+
+    /// Collects unreferenced externrefs once enough PHP values piled up, and
+    /// hands back the released values so the caller drops them without a borrow.
+    fn collect(&self) -> Vec<Zval> {
+        let mut store = self.store.borrow_mut();
+        if store.data().values.live() >= store.data().values.gc_threshold.max(MIN_GC_THRESHOLD) {
+            // A failing GC only delays reclaiming memory, it is not an error for the caller.
+            let _ = store.gc(None);
+            let values = &mut store.data_mut().values;
+            values.reclaim();
+            values.gc_threshold = values.live() * 2;
+        }
+        std::mem::take(&mut store.data_mut().values.released)
     }
 }
 
