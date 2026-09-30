@@ -83,7 +83,7 @@ jobs:
         run: test "$(head -c 2 title.ppm)" = P6
 
   python:
-    name: Python example
+    name: WASI examples
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -94,6 +94,10 @@ jobs:
       - run: examples/python/download.sh
       - name: Run Python code
         run: test "$(php -d "extension=$PWD/target/release/libwasm.so" examples/python/run.php 'print(6*7)' < /dev/null)" = 42
+      - run: examples/quickjs/download.sh
+      - name: Run the shared JavaScript rules
+        run: |
+          php -d "extension=$PWD/target/release/libwasm.so" examples/quickjs/checkout.php | grep -q '"gross": 3688'
 
   lint:
     name: Clippy and rustfmt

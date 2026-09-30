@@ -5,3 +5,4 @@ tools/*.phar binary
 /examples/mago/dist/
 /examples/doom/dist/
 /examples/python/dist/
+/examples/quickjs/dist/

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shared checkout rules</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    textarea { width: 100%; height: 14rem; font: 14px ui-monospace, monospace; }
+    pre { background: #f4f4f4; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Shared checkout rules</h1>
+  <p>This page runs <code>js/rules.js</code> in the browser. <code>checkout.php</code> runs the same file in PHP through QuickJS. Edit the order to see the result change.</p>
+  <textarea id="order">{
+  "country": "BE",
+  "email": "jane@example.com",
+  "lines": [
+    { "sku": "mug", "price": 1299, "quantity": 2 },
+    { "sku": "tea", "price": 450, "quantity": 1 }
+  ]
+}</textarea>
+  <pre id="result"></pre>
+  <script type="module">
+    import { totals, validate } from './js/rules.js';
+
+    const input = document.getElementById('order');
+    const output = document.getElementById('result');
+    const update = () => {
+      try {
+        const order = JSON.parse(input.value);
+        const errors = validate(order);
+        output.textContent = JSON.stringify(errors.length > 0 ? { errors } : { totals: totals(order) }, null, 2);
+      } catch (error) {
+        output.textContent = error.message;
+      }
+    };
+    input.addEventListener('input', update);
+    update();
+  </script>
+</body>
+</html>
