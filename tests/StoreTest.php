@@ -63,7 +63,8 @@ final class StoreTest extends TestCase
     /** @return iterable<string, array{string, 1?: string}> */
     public static function mismatches(): iterable
     {
-        $math = 'new Wasm\Instance(new Wasm\Module(\'' . self::MATH . '\'))';
+        // Parenthesised, because `new X()->y` needs PHP 8.4.
+        $math = '(new Wasm\Instance(new Wasm\Module(\'' . self::MATH . '\')))';
 
         yield 'import from another store' => [<<<PHP
             \$memory = new Wasm\\Memory(['initial' => 1], store: new Wasm\\Store());
