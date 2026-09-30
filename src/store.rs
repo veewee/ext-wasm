@@ -298,6 +298,13 @@ impl StoreHandle {
             // previous value when they end. No other reference to the store is
             // used meanwhile: the outer borrow waits inside wasmtime's call or
             // inside `suspend::drive`.
+            //
+            // wasmtime documents a suspended async call as keeping the store
+            // (`StoreFiberYield::KeepStore`). Using it through the parked caller
+            // relies on wasmtime 49 only swapping the executor, stack limit and
+            // thread-local activations on suspend (runtime/fiber.rs), and on
+            // `busy` keeping out everything that enters wasm or can run the GC.
+            // Check this again whenever wasmtime is upgraded.
             let mut scope = RootScope::new(unsafe { &mut *active });
             return f(scope.as_context_mut());
         }

@@ -207,4 +207,53 @@ final class SuspendingStoreTest extends TestCase
         self::assertSame(0, $fiber->getReturn());
         self::assertSame("hi\n", $wasi->stdout());
     }
+
+    public function test_wasi_initialize_runs_a_reactor_with_a_suspending_import(): void
+    {
+        $wasi = new \Wasm\Wasi();
+        $module = new Module(<<<'EOWAT'
+            (module
+              (import "wasi_snapshot_preview1" "proc_exit" (func (param i32)))
+              (import "env" "later" (func $later (result i32)))
+              (memory (export "memory") 1)
+              (global $ready (export "ready") (mut i32) (i32.const 0))
+              (func (export "_initialize") (global.set $ready (call $later))))
+            EOWAT);
+        $instance = new Instance($module, $wasi->getImportObject() + [
+            'env' => ['later' => new Suspending(fn (): int => \Fiber::suspend())],
+        ]);
+
+        $fiber = new \Fiber(fn () => $wasi->initialize($instance));
+        $fiber->start();
+        $fiber->resume(1);
+
+        self::assertTrue($fiber->isTerminated());
+        self::assertSame(1, $instance->exports->ready->value);
+    }
+
+    public function test_wasi_start_on_a_parked_store_is_busy(): void
+    {
+        $wasi = new \Wasm\Wasi();
+        $module = new Module(<<<'EOWAT'
+            (module
+              (import "wasi_snapshot_preview1" "proc_exit" (func (param i32)))
+              (import "env" "wait" (func $wait))
+              (memory (export "memory") 1)
+              (func (export "run") (call $wait))
+              (func (export "_start")))
+            EOWAT);
+        $instance = new Instance($module, $wasi->getImportObject() + [
+            'env' => ['wait' => new Suspending(fn () => \Fiber::suspend())],
+        ]);
+        $fiber = new \Fiber(fn () => $instance->exports->run());
+        $fiber->start();
+
+        try {
+            $wasi->start($instance);
+            self::fail('Expected the store to be busy');
+        } catch (RuntimeError $busy) {
+            self::assertSame('the store is busy with a suspended call', $busy->getMessage());
+        }
+        $fiber->resume();
+    }
 }
