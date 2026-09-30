@@ -30,6 +30,7 @@ fn invoke(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
+    let store = store::current();
     let callable = caller.data().values.get(key).shallow_clone();
     let args = {
         let mut ctx = caller.as_context_mut();
@@ -39,28 +40,45 @@ fn invoke(
             .collect::<Result<Vec<Zval>, _>>()?
     };
 
-    let returned = store::current().enter_host(caller, || {
+    let returned = store.enter_host(caller, || {
         let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
         ZendCallable::new(&callable)?.try_call(args)
     });
-    // A PHP exception stays pending in the engine while wasm unwinds, and the
-    // PHP entry point that started the call rethrows it unchanged.
-    let returned = match returned {
-        Ok(returned) => returned,
+
+    let mut released = Vec::new();
+    let outcome = match &returned {
+        Ok(value) => write_results(caller, value, result_types, results),
         Err(err) => {
             let mut ctx = caller.as_context_mut();
             // A WasmThrow becomes a wasm exception that wasm code can catch.
-            if let Some(exception) = throw::take_pending(&mut ctx) {
-                return ctx.throw(exception?);
+            // Any other PHP exception stays pending in the engine while wasm
+            // unwinds, and the PHP entry point that started the call rethrows it.
+            match throw::take_pending(&mut ctx) {
+                Some((object, exception)) => {
+                    released.push(object);
+                    exception.and_then(|exception| ctx.throw(exception))
+                }
+                None => Err(wasmtime::Error::msg(format!("PHP callback failed: {err}"))),
             }
-            return Err(wasmtime::Error::msg(format!("PHP callback failed: {err}")));
         }
     };
 
+    // Releasing these can run PHP destructors, which may use wasm objects again.
+    // The outer call still holds the store, so they run inside the host context.
+    store.enter_host(caller, move || drop((returned, args, callable, released)));
+    outcome
+}
+
+fn write_results(
+    caller: &mut Caller<'_, HostState>,
+    returned: &Zval,
+    result_types: &[ValType],
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
     let mut ctx = caller.as_context_mut();
     match result_types {
         [] => {}
-        [ty] => results[0] = to_val(&mut ctx, &returned, ty)?,
+        [ty] => results[0] = to_val(&mut ctx, returned, ty)?,
         types => {
             let list = returned
                 .array()
@@ -69,7 +87,7 @@ fn invoke(
                     wasmtime::Error::msg(format!(
                         "expected a list of {} results, got {}",
                         types.len(),
-                        debug_type(&returned)
+                        debug_type(returned)
                     ))
                 })?;
             for ((slot, ty), value) in results.iter_mut().zip(types).zip(list.values()) {

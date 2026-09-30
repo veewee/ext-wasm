@@ -1,4 +1,5 @@
 use ext_php_rs::args::Arg;
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::builders::{ClassBuilder, ClassProperty};
 use ext_php_rs::class::RegisteredClass;
 use ext_php_rs::convert::IntoZval;
@@ -165,9 +166,11 @@ fn to_php(ctx: &mut StoreContextMut<'_, HostState>, exception: Rooted<ExnRef>) -
 }
 
 /// Takes a pending PHP `WasmThrow`, if any, and turns it into a wasm exception.
+///
+/// The PHP object is handed back so the caller decides where it is released.
 pub fn take_pending(
     ctx: &mut StoreContextMut<'_, HostState>,
-) -> Option<wasmtime::Result<Rooted<ExnRef>>> {
+) -> Option<(ZBox<ZendObject>, wasmtime::Result<Rooted<ExnRef>>)> {
     let pending = ExecutorGlobals::get()
         .exception()
         .is_some_and(|object| object.instance_of(class_entry()));
@@ -175,7 +178,8 @@ pub fn take_pending(
         return None;
     }
     let object = ExecutorGlobals::take_exception()?;
-    Some(to_wasm(ctx, &object))
+    let exception = to_wasm(ctx, &object);
+    Some((object, exception))
 }
 
 fn to_wasm(

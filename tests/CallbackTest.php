@@ -210,6 +210,30 @@ final class CallbackTest extends TestCase
         $this->instance('(import "env" "f" (func))', ['env' => ['f' => 'not a function']]);
     }
 
+    public function test_destructors_of_values_released_by_a_callback_can_use_wasm(): void
+    {
+        $memory = new \Wasm\Memory(['initial' => 1]);
+        $probe = new \ArrayObject();
+        $exports = $this->instance(
+            '(import "env" "f" (func $f)) (func (export "run") (call $f))',
+            // The returned object is discarded because the import has no results.
+            ['env' => ['f' => fn () => new class ($memory, $probe) {
+                public function __construct(private \Wasm\Memory $memory, private \ArrayObject $probe)
+                {
+                }
+
+                public function __destruct()
+                {
+                    $this->probe['seen'] = $this->memory->byteLength();
+                }
+            }]],
+        );
+
+        $exports->run();
+
+        self::assertSame(65536, $probe['seen'] ?? null);
+    }
+
     public function test_start_function_can_call_php(): void
     {
         $called = false;
