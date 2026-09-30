@@ -255,6 +255,9 @@ impl Wasi {
             .clone()
             .filter(|store| Rc::ptr_eq(store, instance.store()))
             .ok_or_else(|| store::mismatch("Instance"))?;
+        if store.is_parked() {
+            return Err(store::busy());
+        }
         if self.used.get() {
             return Err(error(ONE_RUN));
         }
@@ -346,7 +349,7 @@ fn import_object(store: &SharedStore) -> PhpResult<ZBox<ZendHashTable>> {
 }
 
 /// PHP's default_socket_timeout, which also bounds the requests of components.
-fn socket_timeout() -> Option<std::time::Duration> {
+pub(crate) fn socket_timeout() -> Option<std::time::Duration> {
     let settings = ext_php_rs::zend::ExecutorGlobals::get().ini_values();
     let seconds: f64 = settings
         .get("default_socket_timeout")

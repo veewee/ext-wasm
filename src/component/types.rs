@@ -106,7 +106,9 @@ impl FunctionType {
 }
 
 /// A WIT value type. `kind` is the WIT keyword; the other properties are set
-/// for the kinds they belong to and null otherwise.
+/// for the kinds they belong to and null otherwise. `map`, `future`, `stream`
+/// and fixed-length lists only report their kind: components using them do
+/// not compile yet.
 #[php_class]
 #[php(name = "Wasm\\Component\\Type\\ValueType")]
 #[php(flags = ClassFlags::Final)]

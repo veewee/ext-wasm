@@ -466,8 +466,8 @@ impl StoreHandle {
     /// the guard drops.
     pub fn park(&self, access: Active) -> Parked<'_> {
         let previous = self.active.replace(access);
-        self.parked.set(true);
-        Parked(self, previous)
+        let was_parked = self.parked.replace(true);
+        Parked(self, previous, was_parked)
     }
 
     pub fn uses_wasi(&self) -> bool {
@@ -547,11 +547,11 @@ impl Drop for Restore<'_> {
     }
 }
 
-pub struct Parked<'a>(&'a StoreHandle, Active);
+pub struct Parked<'a>(&'a StoreHandle, Active, bool);
 
 impl Drop for Parked<'_> {
     fn drop(&mut self) {
-        self.0.parked.set(false);
+        self.0.parked.set(self.2);
         self.0.active.set(self.1);
     }
 }

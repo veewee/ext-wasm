@@ -235,9 +235,17 @@ pub fn handle(
             collector.abort();
             return Err(call_error(&mut ctx, err));
         }
+        // The component has returned, so nothing more can arrive after a
+        // while; one that kept its response handle would otherwise block forever.
+        let limit = crate::wasi::socket_timeout().unwrap_or(std::time::Duration::from_secs(600));
         let (parts, body) = runtime
-            .block_on(collector)
-            .map_err(|err| runtime_error(wasmtime::Error::msg(format!("{err}"))))?
+            .block_on(async move {
+                match tokio::time::timeout(limit, collector).await {
+                    Ok(joined) => joined.map_err(|err| err.to_string()),
+                    Err(_) => Err("the component did not finish its response in time".to_string()),
+                }
+            })
+            .map_err(|err| runtime_error(wasmtime::Error::msg(err)))?
             .map_err(|message| runtime_error(wasmtime::Error::msg(message)))?;
 
         let mut headers = ZendHashTable::new();

@@ -281,4 +281,35 @@ final class ComponentSuspendingTest extends TestCase
 
         self::assertSame(42, $fiber->getReturn());
     }
+
+    public function test_wasi_start_on_a_parked_instance_is_busy(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (import "later" (func $later (result u32)))
+              (core func $later-core (canon lower (func $later)))
+              (core module $m
+                (import "host" "later" (func $later (result i32)))
+                (func (export "wait") (result i32) (call $later))
+                (func (export "run") (result i32) (i32.const 0)))
+              (core instance $i (instantiate $m (with "host" (instance (export "later" (func $later-core))))))
+              (func (export "wait") (result u32) (canon lift (core func $i "wait")))
+              (func $run (result (result)) (canon lift (core func $i "run")))
+              (instance $run-instance (export "run" (func $run)))
+              (export "wasi:cli/run@0.2.0" (instance $run-instance)))
+            WAT);
+        $wasi = new \Wasm\Wasi();
+        $instance = new Instance($component, ['later' => new Suspending(fn (): int => \Fiber::suspend())], $wasi);
+        $fiber = new \Fiber(fn (): int => $instance->exports->wait());
+        $fiber->start();
+
+        try {
+            $wasi->start($instance);
+            self::fail('Expected the store to be busy');
+        } catch (RuntimeError $busy) {
+            self::assertSame('the store is busy with a suspended call', $busy->getMessage());
+        }
+        $fiber->resume(3);
+        self::assertSame(3, $fiber->getReturn());
+    }
 }
