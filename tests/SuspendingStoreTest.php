@@ -256,4 +256,33 @@ final class SuspendingStoreTest extends TestCase
         }
         $fiber->resume();
     }
+
+    public function test_wasi_instances_resumed_out_of_order_do_not_panic(): void
+    {
+        $script = <<<'PHP'
+            <?php
+            $module = new Wasm\Module('(module
+              (import "wasi_snapshot_preview1" "proc_exit" (func (param i32)))
+              (import "env" "later" (func $later (result i32)))
+              (memory (export "memory") 1)
+              (func (export "run") (result i32) (call $later)))');
+            $fibers = [];
+            foreach (['a', 'b'] as $name) {
+                $wasi = new Wasm\Wasi();
+                $exports = (new Wasm\Instance($module, $wasi->getImportObject() + [
+                    'env' => ['later' => new Wasm\Suspending(fn (): int => Fiber::suspend())],
+                ]))->exports;
+                $fibers[$name] = new Fiber(fn (): int => $exports->run());
+                $fibers[$name]->start();
+            }
+            $fibers['a']->resume(1);
+            $fibers['b']->resume(2);
+            echo $fibers['a']->getReturn(), ',', $fibers['b']->getReturn();
+            PHP;
+
+        $output = $this->runPhp($script, $exitCode);
+
+        self::assertSame(0, $exitCode, $output);
+        self::assertSame('1,2', $output);
+    }
 }

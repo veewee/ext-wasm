@@ -308,7 +308,7 @@ pub fn to_val(
                 )));
             }
             if matches!(ty, Type::Own(_)) {
-                Val::Resource(resource::take_for_own(resource).map_err(ConvertError::Value)?)
+                Val::Resource(resource::take_for_own(ctx, resource).map_err(ConvertError::Value)?)
             } else {
                 Val::Resource(handle)
             }

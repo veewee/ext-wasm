@@ -1,8 +1,6 @@
 //! WIT resources a component imports, implemented by PHP classes: the
 //! component's handles point into a table of PHP objects.
 
-use std::cell::RefCell;
-
 use ext_php_rs::types::Zval;
 use ext_php_rs::zend::ClassEntry;
 use wasmtime::StoreContextMut;
@@ -18,6 +16,12 @@ pub struct HostResources {
     classes: Vec<String>,
     objects: Vec<Option<Zval>>,
     vacant: Vec<u32>,
+    /// PHP objects handed to the component while a call's values are
+    /// converted, with whether each was given as its own. A call takes back
+    /// its entries after it ends: the lent ones always, the owned ones when
+    /// the component never received them. Kept per store, not per thread,
+    /// because a call suspended in one Fiber must not see another Fiber's.
+    handed: Vec<(ResourceAny, bool)>,
 }
 
 impl HostResources {
@@ -62,18 +66,10 @@ impl HostResources {
     }
 }
 
-thread_local! {
-    /// PHP objects handed to the component while a call's values are
-    /// converted, with whether each was given as its own. A call takes back
-    /// its entries after it ends: the lent ones always, the owned ones when
-    /// the component never received them.
-    static HANDED: RefCell<Vec<(ResourceAny, bool)>> = const { RefCell::new(Vec::new()) };
-}
-
 /// Where the entries of the call about to convert its values start, for a
 /// nested call must not take back those of the call around it.
-pub fn mark() -> usize {
-    HANDED.with(|handed| handed.borrow().len())
+pub fn mark(ctx: &StoreContextMut<'_, HostState>) -> usize {
+    ctx.data().host_resources.handed.len()
 }
 
 /// Hands a PHP object of the class behind `ty` to the component: as its own
@@ -102,7 +98,7 @@ pub fn lower(
     let handle = ResourceDynamic::new_own(rep, n)
         .try_into_resource_any(&mut *ctx)
         .map_err(|err| ConvertError::Runtime(format!("{err:#}")))?;
-    HANDED.with(|handed| handed.borrow_mut().push((handle, owned)));
+    ctx.data_mut().host_resources.handed.push((handle, owned));
     Ok(Some(handle))
 }
 
@@ -115,11 +111,11 @@ pub fn reclaim(
     delivered: bool,
     released: &mut Vec<Zval>,
 ) {
-    let handed = HANDED.with(|handed| {
-        let mut handed = handed.borrow_mut();
+    let handed = {
+        let handed = &mut ctx.data_mut().host_resources.handed;
         let mark = mark.min(handed.len());
         handed.split_off(mark)
-    });
+    };
     for (handle, owned) in handed {
         if owned && delivered {
             continue;

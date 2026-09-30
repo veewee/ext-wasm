@@ -308,8 +308,8 @@ fn invoke(
     });
 
     let mut thrown = None;
-    let lent = host_resource::mark();
-    let moves = resource::moves_mark();
+    let lent = host_resource::mark(ctx);
+    let moves = resource::moves_mark(ctx);
     let outcome = match (&returned, ty.results().next()) {
         (Ok(_), None) => Ok(()),
         (Ok(value), Some(Type::Result(result))) => {
@@ -342,7 +342,7 @@ fn invoke(
     };
 
     // The component receives the converted result when this returns Ok.
-    resource::finish_moves(moves, outcome.is_ok());
+    resource::finish_moves(ctx, moves, outcome.is_ok());
     let mut released = Vec::new();
     host_resource::reclaim(ctx, lent, outcome.is_ok(), &mut released);
     for object in released {

@@ -161,8 +161,15 @@ pub fn drive<R>(
     // unwinds a parked call before the slots and the caller pointer go.
     let mut future = pin!(future);
     let mut cx = Context::from_waker(Waker::noop());
+    let runtime = store.uses_wasi().then(crate::engine::wasi_runtime);
     loop {
-        if let Poll::Ready(result) = future.as_mut().poll(&mut cx) {
+        // Entered for this poll only: the PHP callback between polls may
+        // suspend the Fiber, and another Fiber's guard may come and go meanwhile.
+        let polled = {
+            let _entered = runtime.as_ref().map(tokio::runtime::Handle::enter);
+            future.as_mut().poll(&mut cx)
+        };
+        if let Poll::Ready(result) = polled {
             return result;
         }
         // Without a request wasmtime only yielded, for example inside its GC.

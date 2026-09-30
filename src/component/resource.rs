@@ -1,19 +1,20 @@
 //! WIT resources a component exports: a class with a constructor and static
 //! functions, and handles with methods that PHP drops like any object.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
+use wasmtime::StoreContextMut;
 use wasmtime::component::{ResourceAny, ResourceType};
 
 use crate::component::func::Func;
 use crate::component::value::camel;
 use crate::error::error;
-use crate::store::SharedStore;
+use crate::store::{HostState, SharedStore};
 
 /// What a resource type offers, shared by its class and its handles.
 pub struct ResourceMeta {
@@ -204,39 +205,34 @@ impl Resource {
     }
 }
 
-thread_local! {
-    /// Resources given for `own` parameters of the call being converted. They
-    /// move into the component only once every argument converted.
-    static MOVES: RefCell<Vec<*const Resource>> = const { RefCell::new(Vec::new()) };
-}
-
 /// The handle of `resource` for an `own` parameter, moved on `commit_moves(true)`.
-pub fn take_for_own(resource: &Resource) -> Result<ResourceAny, String> {
+pub fn take_for_own(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    resource: &Resource,
+) -> Result<ResourceAny, String> {
     let handle = resource.handle().map_err(str::to_string)?;
-    MOVES.with(|moves| {
-        let mut moves = moves.borrow_mut();
-        let resource: *const Resource = resource;
-        if moves.contains(&resource) {
-            return Err("the same resource cannot be given twice as an own value".to_string());
-        }
-        moves.push(resource);
-        Ok(handle)
-    })
+    let moves = &mut ctx.data_mut().moves;
+    let resource: *const Resource = resource;
+    if moves.contains(&resource) {
+        return Err("the same resource cannot be given twice as an own value".to_string());
+    }
+    moves.push(resource);
+    Ok(handle)
 }
 
 /// Where the moves of the call about to convert its values start.
-pub fn moves_mark() -> usize {
-    MOVES.with(|moves| moves.borrow().len())
+pub fn moves_mark(ctx: &StoreContextMut<'_, HostState>) -> usize {
+    ctx.data().moves.len()
 }
 
 /// Ends the moves recorded since `mark`: the resources move into the
 /// component when `delivered`, and stay with PHP otherwise.
-pub fn finish_moves(mark: usize, delivered: bool) {
-    let moved = MOVES.with(|moves| {
-        let mut moves = moves.borrow_mut();
+pub fn finish_moves(ctx: &mut StoreContextMut<'_, HostState>, mark: usize, delivered: bool) {
+    let moved = {
+        let moves = &mut ctx.data_mut().moves;
         let mark = mark.min(moves.len());
         moves.split_off(mark)
-    });
+    };
     if delivered {
         for resource in moved {
             // SAFETY: the PHP objects are the arguments or the return value of

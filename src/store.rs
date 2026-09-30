@@ -27,6 +27,9 @@ pub struct HostState {
     pub http: Option<crate::component::http::WasiHttp>,
     /// The PHP objects behind resources a component imports.
     pub host_resources: crate::component::host_resource::HostResources,
+    /// Component resources given for `own` values of the calls being made,
+    /// which move into the component once their call worked.
+    pub moves: Vec<*const crate::component::resource::Resource>,
     /// Set once an instance with a `Wasm\Suspending` import joins this store.
     /// From then on every PHP callback is async and every call goes through
     /// `suspend::drive`, because wasmtime rejects sync calls in the store.
@@ -209,6 +212,9 @@ pub struct StoreHandle {
     /// Component resource handles released while the store was in use, for
     /// example by a PHP destructor during a call. Dropped after the call.
     pending_drops: RefCell<Vec<wasmtime::component::ResourceAny>>,
+    /// Whether the store runs WASI, whose functions need the tokio runtime
+    /// entered while wasm runs.
+    uses_wasi: Cell<bool>,
     /// The resource types component instances in this store export, so a
     /// handle the component returns gets its methods.
     pub resource_types: RefCell<Vec<Rc<crate::component::resource::ResourceMeta>>>,
@@ -275,6 +281,7 @@ pub fn new() -> SharedStore {
         response: RefCell::new(None),
         garbage: RefCell::new(Vec::new()),
         pending_drops: RefCell::new(Vec::new()),
+        uses_wasi: Cell::new(false),
         resource_types: RefCell::new(Vec::new()),
     })
 }
@@ -381,7 +388,12 @@ impl StoreHandle {
         let result = {
             let mut store = self.store.borrow_mut();
             let wasi = store.data().wasi.is_some() || store.data().wasi_p2.is_some();
-            let runtime = wasi.then(crate::engine::wasi_runtime);
+            self.uses_wasi.set(wasi);
+            // A call into an async store can suspend its Fiber, and tokio
+            // requires its enter guards to drop in reverse order, which
+            // Fibers resumed out of order break. `suspend::drive` enters the
+            // runtime for each poll there instead.
+            let runtime = (wasi && !store.data().is_async).then(crate::engine::wasi_runtime);
             let _entered = runtime.as_ref().map(tokio::runtime::Handle::enter);
             let mut scope = RootScope::new(&mut *store);
             f(scope.as_context_mut())
@@ -447,6 +459,10 @@ impl StoreHandle {
         let previous = self.active.replace(Active::Core(caller));
         self.parked.set(true);
         Parked(self, previous)
+    }
+
+    pub fn uses_wasi(&self) -> bool {
+        self.uses_wasi.get()
     }
 
     pub fn is_parked(&self) -> bool {

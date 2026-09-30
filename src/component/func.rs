@@ -69,8 +69,8 @@ impl Func {
                     args.len()
                 )));
             }
-            let lent = host_resource::mark();
-            let moves = resource::moves_mark();
+            let lent = host_resource::mark(&ctx);
+            let moves = resource::moves_mark(&ctx);
             let converted = args
                 .iter()
                 .zip(&params)
@@ -89,7 +89,7 @@ impl Func {
             };
             // Resources given for own parameters belong to the component only
             // once the call worked, and lent PHP objects always come back.
-            resource::finish_moves(moves, called.is_ok());
+            resource::finish_moves(&mut ctx, moves, called.is_ok());
             let mut released = Vec::new();
             host_resource::reclaim(&mut ctx, lent, called.is_ok(), &mut released);
             for object in released {
