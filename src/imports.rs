@@ -2,6 +2,7 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::{Extern, ExternType, ImportType, Mutability};
 
+use crate::callback::host_func;
 use crate::error::link_error;
 use crate::func::Func;
 use crate::global::{new_global, GlobalVar};
@@ -36,6 +37,7 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
         return Ok(func.inner.into());
     }
     match import.ty() {
+        ExternType::Func(ty) if value.is_callable() => Ok(store.with(|ctx| host_func(ctx, ty, value)).into()),
         // JS accepts a plain number for an immutable global import.
         ExternType::Global(ty) if ty.mutability() == Mutability::Const && !value.is_object() => {
             let val = to_val(value, ty.content()).map_err(|_| mismatch(import, value))?;

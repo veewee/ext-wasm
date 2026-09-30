@@ -44,7 +44,7 @@ pub fn call(store: &SharedStore, func: &wasmtime::Func, args: &[&Zval]) -> PhpRe
             .iter()
             .zip(&params)
             .map(|(arg, ty)| to_val(arg, ty))
-            .collect::<PhpResult<Vec<Val>>>()?;
+            .collect::<Result<Vec<Val>, _>>()?;
         let mut results: Vec<Val> = ty.results().map(|ty| default_val(&ty)).collect();
         func.call(&mut ctx, &args, &mut results).map_err(runtime_error)?;
         results_to_zval(&results)

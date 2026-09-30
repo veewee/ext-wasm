@@ -1,12 +1,32 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use ext_php_rs::types::Zval;
 use wasmtime::{AsContextMut, Caller, Store, StoreContextMut};
 
 use crate::engine::engine;
 
 #[derive(Default)]
-pub struct HostState {}
+pub struct HostState {
+    /// PHP values referenced from wasm (callables behind host functions).
+    /// wasmtime requires host closures to be Send + Sync and Zval is neither,
+    /// so closures capture a key into this list instead of the value.
+    pub values: Values,
+}
+
+#[derive(Default)]
+pub struct Values(Vec<Zval>);
+
+impl Values {
+    pub fn insert(&mut self, value: Zval) -> usize {
+        self.0.push(value);
+        self.0.len() - 1
+    }
+
+    pub fn get(&self, key: usize) -> &Zval {
+        &self.0[key]
+    }
+}
 
 /// The wasmtime store shared by every wasm object on this PHP thread.
 ///

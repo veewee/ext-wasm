@@ -1,5 +1,6 @@
 #![cfg_attr(windows, feature(abi_vectorcall))]
 
+mod callback;
 mod engine;
 mod error;
 mod exports;

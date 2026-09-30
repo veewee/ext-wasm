@@ -59,7 +59,7 @@ impl GlobalVar {
     }
 
     pub fn value_of(&self) -> PhpResult<Zval> {
-        self.store.with(|mut ctx| from_val(&self.inner.get(&mut ctx)))
+        Ok(self.store.with(|mut ctx| from_val(&self.inner.get(&mut ctx)))?)
     }
 }
 

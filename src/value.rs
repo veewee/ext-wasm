@@ -1,4 +1,4 @@
-use ext_php_rs::exception::PhpResult;
+use ext_php_rs::exception::{PhpException, PhpResult};
 use ext_php_rs::flags::DataType;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use ext_php_rs::class::RegisteredClass;
@@ -8,16 +8,43 @@ use wasmtime::{Val, ValType};
 
 use crate::error::{type_error, value_error};
 
+/// A conversion failure, kept separate from `PhpException` so host functions
+/// can turn it into a trap message instead of a thrown PHP exception.
+#[derive(Debug)]
+pub enum ConvertError {
+    Type(String),
+    Value(String),
+}
+
+impl std::fmt::Display for ConvertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Type(message) | Self::Value(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ConvertError {}
+
+impl From<ConvertError> for PhpException {
+    fn from(err: ConvertError) -> Self {
+        match err {
+            ConvertError::Type(message) => type_error(message),
+            ConvertError::Value(message) => value_error(message),
+        }
+    }
+}
+
 /// Converts a PHP value to a wasm value of type `ty`.
 ///
 /// Stricter than JS on purpose: JS coerces anything with ToNumber, which turns
 /// typos like `'1'` or `1.5` for an i32 into silent bugs.
-pub fn to_val(value: &Zval, ty: &ValType) -> PhpResult<Val> {
+pub fn to_val(value: &Zval, ty: &ValType) -> Result<Val, ConvertError> {
     Ok(match ty {
         ValType::I32 => {
             let n = expect_int(value, ty)?;
             if n < i64::from(i32::MIN) || n > i64::from(u32::MAX) {
-                return Err(value_error(format!("{n} is out of range for i32")));
+                return Err(ConvertError::Value(format!("{n} is out of range for i32")));
             }
             // Truncation keeps the bit pattern, so unsigned input maps onto the signed value.
             Val::I32(n as i32)
@@ -25,18 +52,18 @@ pub fn to_val(value: &Zval, ty: &ValType) -> PhpResult<Val> {
         ValType::I64 => Val::I64(expect_int(value, ty)?),
         ValType::F32 => Val::F32((expect_float(value, ty)? as f32).to_bits()),
         ValType::F64 => Val::F64(expect_float(value, ty)?.to_bits()),
-        other => return Err(type_error(format!("unsupported wasm type {other}"))),
+        other => return Err(ConvertError::Type(format!("unsupported wasm type {other}"))),
     })
 }
 
-pub fn from_val(val: &Val) -> PhpResult<Zval> {
+pub fn from_val(val: &Val) -> Result<Zval, ConvertError> {
     let mut zval = Zval::new();
     match val {
         Val::I32(n) => zval.set_long(*n),
         Val::I64(n) => zval.set_long(*n),
         Val::F32(bits) => zval.set_double(f32::from_bits(*bits)),
         Val::F64(bits) => zval.set_double(f64::from_bits(*bits)),
-        other => return Err(type_error(format!("unsupported wasm value {other:?}"))),
+        other => return Err(ConvertError::Type(format!("unsupported wasm value {other:?}"))),
     }
     Ok(zval)
 }
@@ -45,7 +72,7 @@ pub fn from_val(val: &Val) -> PhpResult<Zval> {
 pub fn results_to_zval(results: &[Val]) -> PhpResult<Zval> {
     match results {
         [] => Ok(Zval::null()),
-        [single] => from_val(single),
+        [single] => Ok(from_val(single)?),
         many => {
             let mut list = ZendHashTable::new();
             for val in many {
@@ -60,17 +87,17 @@ pub fn default_val(ty: &ValType) -> Val {
     Val::default_for_ty(ty).unwrap_or(Val::I32(0))
 }
 
-fn expect_int(value: &Zval, ty: &ValType) -> PhpResult<i64> {
+fn expect_int(value: &Zval, ty: &ValType) -> Result<i64, ConvertError> {
     value
         .long()
-        .ok_or_else(|| type_error(format!("expected int for {ty}, got {}", debug_type(value))))
+        .ok_or_else(|| ConvertError::Type(format!("expected int for {ty}, got {}", debug_type(value))))
 }
 
-fn expect_float(value: &Zval, ty: &ValType) -> PhpResult<f64> {
+fn expect_float(value: &Zval, ty: &ValType) -> Result<f64, ConvertError> {
     value
         .double()
         .or_else(|| value.long().map(|n| n as f64))
-        .ok_or_else(|| type_error(format!("expected int|float for {ty}, got {}", debug_type(value))))
+        .ok_or_else(|| ConvertError::Type(format!("expected int|float for {ty}, got {}", debug_type(value))))
 }
 
 /// Mirrors PHP's `get_debug_type()` for error messages.
