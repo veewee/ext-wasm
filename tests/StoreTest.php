@@ -154,6 +154,45 @@ final class StoreTest extends TestCase
         self::assertSame($memory, $global->value);
     }
 
+    public function test_standalone_objects_can_be_imported_together(): void
+    {
+        $memory = new Memory(['initial' => 1]);
+        $counter = new GlobalVar(['value' => 'i32', 'mutable' => true], 0);
+        $instance = new Instance(new Module(<<<'EOWAT'
+            (module
+              (import "env" "memory" (memory 1))
+              (import "env" "counter" (global $counter (mut i32)))
+              (func (export "run")
+                (global.set $counter (i32.add (global.get $counter) (i32.const 1)))
+                (i32.store8 (i32.const 0) (global.get $counter))))
+            EOWAT), ['env' => ['memory' => $memory, 'counter' => $counter]]);
+
+        $instance->exports->run();
+
+        self::assertSame(1, $counter->value);
+        self::assertSame("\1", $memory->read(0, 1));
+    }
+
+    public function test_memory_stays_flat_with_a_standalone_memory_per_job(): void
+    {
+        $output = $this->runPhp(<<<'PHP'
+            <?php
+            $unit = PHP_OS_FAMILY === 'Darwin' ? 1048576 : 1024;
+            $module = new Wasm\Module('(module (import "env" "memory" (memory 16)))');
+            $kept = new Wasm\Instance(new Wasm\Module('(module (memory 1))'));
+            $before = getrusage()['ru_maxrss'] / $unit;
+            for ($i = 0; $i < 300; $i++) {
+                $memory = new Wasm\Memory(['initial' => 16]);
+                $memory->write(0, str_repeat("\1", 1048576));
+                $instance = new Wasm\Instance($module, ['env' => ['memory' => $memory]]);
+                unset($instance, $memory);
+            }
+            echo (int) (getrusage()['ru_maxrss'] / $unit - $before);
+            PHP);
+
+        self::assertLessThan(100, (int) $output, "peak RSS grew by {$output} MiB");
+    }
+
     public function test_instances_without_shared_imports_do_not_share_a_store(): void
     {
         $math = new Instance(new Module(self::MATH));

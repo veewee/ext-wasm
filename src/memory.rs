@@ -29,7 +29,7 @@ impl Memory {
             .ok_or_else(|| type_error("descriptor \"initial\" is required"))?;
         let maximum = descriptor_int(descriptor, "maximum")?;
         let ty = MemoryType::new(page_count(initial)?, maximum.map(page_count).transpose()?);
-        let store = store::choose(store, [])?;
+        let store = store::choose(store, [], store::standalone)?;
         let inner = store
             .with(|mut ctx| wasmtime::Memory::new(&mut ctx, ty))
             .map_err(|err| value_error(format!("{err:#}")))?;

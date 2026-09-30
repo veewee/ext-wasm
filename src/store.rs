@@ -122,8 +122,9 @@ impl Values {
 
 /// A wasmtime store and the PHP objects that share it.
 ///
-/// wasmtime frees instances only together with their store, so every object
-/// gets its own store unless it is combined with others: see `choose`. Every
+/// wasmtime frees instances only together with their store, so every
+/// instance gets its own store unless it is combined with others: see
+/// `choose` and `standalone`. Every
 /// PHP wrapper holds an `Rc` to this handle, so the store lives exactly as long
 /// as some wasm object in it does.
 pub struct StoreHandle {
@@ -137,6 +138,26 @@ pub struct StoreHandle {
 }
 
 pub type SharedStore = Rc<StoreHandle>;
+
+thread_local! {
+    static STANDALONE: RefCell<Weak<StoreHandle>> = const { RefCell::new(Weak::new()) };
+}
+
+/// The store that standalone objects share when they are created without one.
+///
+/// JS imports a Memory and a Global created on their own into one instance,
+/// which is only possible when both live in the same store. Instances get a
+/// store of their own instead, so dropping one frees its memory.
+pub fn standalone() -> SharedStore {
+    STANDALONE.with(|standalone| {
+        if let Some(handle) = standalone.borrow().upgrade() {
+            return handle;
+        }
+        let handle = new();
+        *standalone.borrow_mut() = Rc::downgrade(&handle);
+        handle
+    })
+}
 
 /// Creates a store of its own.
 pub fn new() -> SharedStore {
@@ -165,8 +186,10 @@ pub fn of(ctx: &impl AsContext<Data = HostState>) -> SharedStore {
 /// Groups wasm objects so they can be combined.
 ///
 /// An object created without a store joins the store of the wasm objects it
-/// is built from, or gets a store of its own. wasmtime frees memory one whole
-/// store at a time, when no object in it is left.
+/// is built from. Otherwise an instance gets a store of its own, and a
+/// Memory, Table, GlobalVar or Tag joins the store all such standalone
+/// objects share. wasmtime frees memory one whole store at a time, when no
+/// object in it is left.
 #[php_class]
 #[php(name = "Wasm\\Store")]
 #[php(flags = ClassFlags::Final)]
@@ -182,10 +205,11 @@ impl StoreObject {
 }
 
 /// Picks the store of a new object: the explicit one, otherwise the store of
-/// the wasm objects it is built from, otherwise a fresh one.
+/// the wasm objects it is built from, otherwise `fallback`.
 pub fn choose(
     explicit: Option<&StoreObject>,
     from: impl IntoIterator<Item = (SharedStore, &'static str)>,
+    fallback: fn() -> SharedStore,
 ) -> PhpResult<SharedStore> {
     let mut chosen = explicit.map(|store| store.handle.clone());
     for (store, kind) in from {
@@ -195,7 +219,7 @@ pub fn choose(
             Some(_) => return Err(mismatch(kind)),
         }
     }
-    Ok(chosen.unwrap_or_else(new))
+    Ok(chosen.unwrap_or_else(fallback))
 }
 
 /// Whether `store` is the store `ctx` belongs to.

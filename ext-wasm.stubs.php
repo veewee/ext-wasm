@@ -215,8 +215,10 @@ namespace Wasm {
      * Groups wasm objects so they can be combined.
      *
      * An object created without a store joins the store of the wasm objects it
-     * is built from, or gets a store of its own. wasmtime frees memory one whole
-     * store at a time, when no object in it is left.
+     * is built from. Otherwise an instance gets a store of its own, and a
+     * Memory, Table, GlobalVar or Tag joins the store all such standalone
+     * objects share. wasmtime frees memory one whole store at a time, when no
+     * object in it is left.
      */
     class Store {
         public function __construct() {}

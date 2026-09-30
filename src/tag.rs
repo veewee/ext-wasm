@@ -51,7 +51,7 @@ impl Tag {
             })
             .collect::<PhpResult<Vec<ValType>>>()?;
         let ty = TagType::new(FuncType::new(engine(), parameters, []));
-        let store = store::choose(store, [])?;
+        let store = store::choose(store, [], store::standalone)?;
         let inner = store
             .with(|mut ctx| wasmtime::Tag::new(&mut ctx, &ty))
             .map_err(|err| value_error(format!("{err:#}")))?;

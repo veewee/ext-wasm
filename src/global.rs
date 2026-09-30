@@ -44,7 +44,7 @@ impl GlobalVar {
             .filter(|_| matches!(&ty, ValType::Ref(r) if r.heap_type().top() == HeapTopType::Func))
             .and_then(downcast::<Func>)
             .map(|func| (func.store.clone(), "Func"));
-        let store = store::choose(store, from)?;
+        let store = store::choose(store, from, store::standalone)?;
         let inner = store.with(|mut ctx| {
             let initial = match value {
                 Some(value) if !value.is_null() => to_val(&mut ctx, value, &ty)?,

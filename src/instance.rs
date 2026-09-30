@@ -26,7 +26,7 @@ impl Instance {
         imports: Option<&ZendHashTable>,
         store: Option<&StoreObject>,
     ) -> PhpResult<Self> {
-        let store = store::choose(store, imports::stores(&module.inner, imports))?;
+        let store = store::choose(store, imports::stores(&module.inner, imports), store::new)?;
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
             let instance = match wasmtime::Instance::new(&mut ctx, &module.inner, &imports) {
