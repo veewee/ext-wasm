@@ -81,8 +81,9 @@ pub fn adopt_exception_behaviour() {
                 let class = class.cast_mut();
                 (*class).__bindgen_anon_2.create_object = (*base).__bindgen_anon_2.create_object;
                 (*class).ce_flags &= !ClassFlags::NotSerializable.bits();
-                // Overwriting the function in place covers `new`, `parent::__construct()`
-                // and reflection, which all resolve to this same function entry.
+                // Only the handler is swapped: `new`, `parent::__construct()` and
+                // reflection all resolve to this function entry, which keeps its
+                // own class scope, name and signature.
                 let Some(ours) = (*class).constructor.as_mut() else {
                     continue;
                 };
@@ -90,7 +91,7 @@ pub fn adopt_exception_behaviour() {
                     // Keeps the declared (Tag $tag, array $payload) signature.
                     ours.internal_function.handler = Some(crate::throw::construct);
                 } else if let Some(theirs) = (*base).constructor.as_ref() {
-                    ours.internal_function = theirs.internal_function;
+                    ours.internal_function.handler = theirs.internal_function.handler;
                 }
             }
         }

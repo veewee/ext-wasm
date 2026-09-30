@@ -43,6 +43,20 @@ final class ErrorTest extends TestCase
         self::assertSame(0, $error->getCode());
     }
 
+    /** @param class-string<WasmException> $class */
+    #[DataProvider('errors')]
+    public function test_the_constructor_belongs_to_the_error_class(string $class): void
+    {
+        self::assertSame($class, (new \ReflectionMethod($class, '__construct'))->getDeclaringClass()->getName());
+
+        try {
+            new $class([]);
+            self::fail('Expected a TypeError');
+        } catch (\TypeError $error) {
+            self::assertStringStartsWith($class . '::__construct()', $error->getMessage());
+        }
+    }
+
     public function test_errors_can_be_thrown_and_caught(): void
     {
         $line = __LINE__ + 2;
