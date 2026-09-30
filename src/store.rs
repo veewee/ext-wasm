@@ -10,8 +10,19 @@ use crate::engine::engine;
 #[derive(Default)]
 pub struct HostState {
     pub values: Values,
-    /// PHP objects of the tags PHP has seen, so a tag round trips by identity.
-    pub tags: Vec<(wasmtime::Tag, Zval)>,
+    /// The PHP objects of tags PHP has seen, so a tag round trips by identity.
+    pub tags: Vec<KnownTag>,
+}
+
+/// A tag's PHP object, held without a reference.
+///
+/// The object owns the store, so a counted reference here would be a cycle
+/// that PHP's garbage collector cannot see. `alive` is cleared when the object
+/// is freed.
+pub struct KnownTag {
+    pub tag: wasmtime::Tag,
+    pub object: *mut ext_php_rs::types::ZendObject,
+    pub alive: Rc<Cell<bool>>,
 }
 
 /// PHP values referenced from wasm: callables behind host functions and

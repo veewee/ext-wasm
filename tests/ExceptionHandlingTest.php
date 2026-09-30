@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Test;
 
 use PHPUnit\Framework\TestCase;
+
+require_once __DIR__ . '/RunsPhpInSubprocess.php';
 use Wasm\Exception\RuntimeError;
 use Wasm\Exception\WasmException;
 use Wasm\Exception\WasmThrow;
@@ -14,6 +16,8 @@ use Wasm\Tag;
 
 final class ExceptionHandlingTest extends TestCase
 {
+    use RunsPhpInSubprocess;
+
     public function test_tags_are_created_exported_and_imported(): void
     {
         $tag = new Tag(['parameters' => ['i32', 'f64']]);
@@ -22,6 +26,29 @@ final class ExceptionHandlingTest extends TestCase
         ]);
 
         self::assertInstanceOf(Tag::class, $instance->exports->same);
+    }
+
+    public function test_a_known_tag_does_not_keep_the_store_alive(): void
+    {
+        $output = $this->runPhp(<<<'PHP'
+            <?php
+            $probe = new ArrayObject();
+            $marker = new class ($probe) {
+                public function __construct(private ArrayObject $probe) {}
+                public function __destruct() { $this->probe['released'] = true; }
+            };
+            $callback = static function () use ($marker): void {};
+            unset($marker);
+            $tag = new Wasm\Tag(['parameters' => []]);
+            $instance = new Wasm\Instance(new Wasm\Module('(module (import "env" "e" (tag)) (import "env" "f" (func)))'), [
+                'env' => ['e' => $tag, 'f' => $callback],
+            ]);
+            unset($callback, $tag, $instance);
+            gc_collect_cycles();
+            echo ($probe['released'] ?? false) ? 'released' : 'still alive';
+            PHP);
+
+        self::assertSame('released', $output);
     }
 
     public function test_tag_parameters_must_be_value_types(): void

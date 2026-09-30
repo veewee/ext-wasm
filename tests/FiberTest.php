@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Test;
 
 use PHPUnit\Framework\TestCase;
+
+require_once __DIR__ . '/RunsPhpInSubprocess.php';
 use Wasm\Instance;
 use Wasm\Module;
 
@@ -14,6 +16,8 @@ use Wasm\Module;
  */
 final class FiberTest extends TestCase
 {
+    use RunsPhpInSubprocess;
+
     private const SUSPENDING_IMPORT = '(module (import "env" "wait" (func $wait)) (func (export "run") (call $wait)))';
 
     public function test_suspending_a_fiber_inside_a_callback_throws_a_fiber_error(): void
@@ -70,31 +74,5 @@ final class FiberTest extends TestCase
         $fiber->resume();
 
         self::assertSame(3, $fiber->getReturn());
-    }
-
-    private function runPhp(string $code, ?int &$exitCode): string
-    {
-        $file = tempnam(sys_get_temp_dir(), 'wasm-fiber');
-        file_put_contents($file, $code);
-        $command = [PHP_BINARY, '-n', '-d', 'extension=' . self::loadedExtensionPath(), $file];
-        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        $output = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
-        $exitCode = proc_close($process);
-        unlink($file);
-
-        return trim($output);
-    }
-
-    /** The built extension this suite runs against, for child processes. */
-    private static function loadedExtensionPath(): string
-    {
-        $override = getenv('WASM_EXTENSION');
-        if (is_string($override) && $override !== '') {
-            return $override;
-        }
-        $candidates = glob(dirname(__DIR__) . '/target/{release,debug}/{libwasm.so,libwasm.dylib,wasm.dll}', GLOB_BRACE) ?: [];
-        usort($candidates, fn (string $a, string $b): int => filemtime($b) <=> filemtime($a));
-
-        return $candidates[0] ?? 'wasm';
     }
 }
