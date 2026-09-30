@@ -20,22 +20,33 @@ The extension is experimental. The API can still change before a 1.0 release.
 
 ## Installation
 
-Install it with [PIE](https://github.com/php/pie):
+The package is meant to be installed with [PIE](https://github.com/php/pie):
 
 ```sh
 pie install veewee/ext-wasm
 ```
 
-PIE downloads a prebuilt binary for Linux (x86_64 and arm64, glibc) and macOS (arm64) on PHP 8.2 to 8.5. On other platforms it builds from source, which needs a Rust toolchain from [rustup.rs](https://rustup.rs) and clang.
+It is not on Packagist yet and has no release, so until then build it from a checkout as shown below.
 
-To build from a checkout instead:
+The release workflow attaches prebuilt binaries for PHP 8.2 to 8.5 to each release, and PIE picks the one for your platform:
+
+| Platform | Prebuilt | Without a prebuilt binary |
+|---|---|---|
+| Linux x86_64 and arm64, glibc 2.35 or newer | NTS and ZTS | |
+| macOS arm64 | NTS | ZTS: PIE builds from source |
+| Windows x86_64 | NTS | PIE cannot build from source on Windows, so ZTS PHP is not supported there |
+| Linux with musl (Alpine), macOS x86_64, other Unix | | PIE builds from source, which needs a Rust toolchain from [rustup.rs](https://rustup.rs) and clang |
+
+CI runs the test suite on Linux, macOS and Windows for PHP 8.2 to 8.5, and on thread-safe PHP 8.4 on Linux.
+
+To build from a checkout:
 
 ```sh
 cargo build --release
-php -d extension=target/release/libwasm.so your-script.php   # libwasm.dylib on macOS
+php -d extension=target/release/libwasm.so your-script.php   # libwasm.dylib on macOS, wasm.dll on Windows
 ```
 
-Windows is not supported by PIE yet. The extension builds there with nightly Rust, which ext-php-rs requires on Windows.
+On Windows this needs nightly Rust, because ext-php-rs uses the unstable vectorcall ABI there.
 
 ## Usage
 
@@ -45,6 +56,7 @@ Windows is not supported by PIE yet. The extension builds there with nightly Rus
 
 ```php
 $module = new Wasm\Module(file_get_contents('module.wasm'));
+$module = Wasm\Module::fromFile('module.wasm');   // the same, without reading the file into a PHP string
 $instance = new Wasm\Instance($module, $imports);
 
 Wasm\validate($bytes);                            // bool
@@ -58,6 +70,8 @@ $module->customSections('name');                  // list of binary strings
 ```
 
 JS has these three as static functions on `WebAssembly.Module`. Here they are methods of the module.
+
+`Module::fromFile()` reads local files only, relative to PHP's working directory and within `open_basedir`. Use `file_get_contents()` for stream wrappers such as `phar://`.
 
 ### Exports
 
@@ -76,7 +90,7 @@ A function without results returns `null`, one result is returned as is, and sev
 
 Imports use the shape of the JS import object: `['module' => ['name' => $value]]`. A value can be any PHP callable, or a `Func`, `Memory`, `Table`, `GlobalVar` or `Tag`. An immutable global import also accepts a plain number.
 
-A PHP callback can call back into the same instance and read or write its memory while wasm is running. An exception thrown in a callback unwinds the wasm stack and reaches the caller as the original exception object.
+A PHP callback can call back into the same instance and read or write its memory while wasm is running, except in an async store (see [Async imports](#async-imports)). An exception thrown in a callback unwinds the wasm stack and reaches the caller as the original exception object.
 
 ### Memory, tables and globals
 
@@ -145,6 +159,33 @@ Modules that work as a library export `_initialize` instead of `_start`. Call `$
 
 `getImportObject()` returns the WASI functions under `wasi_snapshot_preview1`, so you can combine them with imports of your own: `[...$wasi->getImportObject(), 'env' => [...]]`. A `Wasi` object belongs to one run of one module; create a new one for the next run.
 
+### Async imports
+
+A PHP callback wrapped in `Wasm\Suspending` may suspend its Fiber while wasm waits for it, like `WebAssembly.Suspending` with JS Promise Integration. Other Fibers keep running meanwhile, so an event loop such as [Amp](https://amphp.org) can wait on many wasm calls at once:
+
+```php
+$imports = ['host' => [
+    'lookup' => new Wasm\Suspending(function (int $id): int {
+        Amp\delay(0.1);              // suspends this Fiber only
+        return $id * 2;
+    }),
+]];
+
+$futures = array_map(
+    fn (int $id) => Amp\async(fn () => (new Wasm\Instance($module, $imports))->exports->run($id)),
+    range(1, 10),
+);
+$results = Amp\Future\await($futures);   // about 0.1 s in total
+```
+
+In JS the export also has to be wrapped in `WebAssembly.promising()`. PHP needs no wrapper, because calling the export only blocks the Fiber that called it.
+
+An instance with a `Suspending` import makes its store async. In an async store every PHP callback, Suspending or plain, runs while its wasm call is paused, and wasmtime's garbage collector cannot see the frames of a paused call. So while a callback runs, the store throws a `RuntimeError` "the store is busy with a suspended call" for anything that could start the collector: calling its exports, instantiating into it, `Wasi::start()` or `initialize()`, and passing a new PHP value as an externref. This applies inside the callback and in other Fibers alike. Memory, globals and tables stay usable.
+
+In practice, give every Fiber an instance of its own, and have the callback write its answer into memory at an address wasm passes in instead of calling an allocator export. A store that already has plain PHP callbacks cannot take Suspending imports and throws a `LinkError`. Plain callbacks in an async store still cannot switch Fibers, and a call into an async store takes about 0.1 microseconds longer than into a sync one, measured on an Apple Silicon Mac.
+
+[examples/async](examples/async) runs ten lookups concurrently through Amp.
+
 ### Values
 
 | Wasm type | From PHP | To PHP |
@@ -169,7 +210,7 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and eight larger ones:
+The [examples](examples) folder has small scripts for each feature, and nine larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
@@ -178,6 +219,7 @@ The [examples](examples) folder has small scripts for each feature, and eight la
 - [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
 - [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark, with the string passing explained.
+- [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
 - [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
 ## Compilation cache
@@ -198,7 +240,7 @@ The cache holds machine code that runs inside the PHP process, so anyone who can
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.
 - wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance, or an object the instance imports, keeps that instance and its store alive until the PHP process ends.
-- A PHP callback cannot switch fibers while wasm waits for it: `Fiber::suspend()` inside a callback throws a `FiberError`. Calling wasm from inside a fiber, and suspending between calls, works as usual.
+- A plain PHP callback cannot switch Fibers while wasm waits for it: `Fiber::suspend()` inside it throws a `FiberError`. Wrap the callback in `Wasm\Suspending` to allow it (see [Async imports](#async-imports)). Calling wasm from inside a Fiber, and suspending between calls, works as usual.
 - WASI support covers preview1, not preview2 and the component model. A WASI program that waits on a file and a timer at once in a forked child has not been tested and might hang.
 
 ## Development
