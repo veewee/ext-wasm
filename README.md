@@ -243,9 +243,19 @@ $instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::
 
 `[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each method and static function the resource declares, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
 
+One instance's exports can be another's imports. An interface one instance exports can be given as the value of an interface import that declares the same functions, and an exported `ResourceClass` can implement a resource import inside an interface array. Each instance needs a `Wasi` object of its own:
+
+```php
+$counters = (new Instance(Component::fromFile('counters.wasm'), wasi: new Wasi()))->exports->get('docs:demo/counters');
+$composer = new Instance(Component::fromFile('composer.wasm'), ['docs:demo/counters' => $counters], new Wasi());
+// or: ['docs:demo/counters' => ['counter' => $counters->get('counter'), 'total' => fn (Resource $a, Resource $b): int => $a->value() + $b->value()]]
+```
+
+wasmtime's component linker cannot define an import from another instance's export, so every call between them goes through PHP and converts its values on the way. The importing instance works with the exporting instance's `Resource` objects: a handle it returns is the same PHP object that went in, and one it drops is released to PHP, which drops it in the exporting instance when the last reference goes. A handle of another instance, or one that was dropped or moved, is refused before the call. Linking compares names, not signatures, so a function whose parameters differ between the two fails at its first call, and from then on every call into the importing instance throws a `RuntimeError`. An instance needs its imports when it is created, so two instances cannot import each other's exports. PHP imports that hold on to each other's instances form a cycle the garbage collector does not free, and those instances stay alive until the end of the request.
+
 A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface, and then suspends its Fiber as core imports do (see [Async imports](#async-imports)). Every other PHP import of that instance still blocks Fiber switches, and while a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call". Resource constructors and methods implemented by PHP classes cannot suspend.
 
-Components cannot be combined with core objects: a component instance has a store of its own. A resource that one component instance exports cannot be passed to another instance yet, which is a `TypeError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
+Components cannot be combined with core objects: a component instance has a store of its own. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
 
