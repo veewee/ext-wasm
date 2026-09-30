@@ -83,7 +83,7 @@ jobs:
         run: test "$(head -c 2 title.ppm)" = P6
 
   python:
-    name: WASI and Rust examples
+    name: Larger examples
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -98,6 +98,10 @@ jobs:
       - name: Run the shared JavaScript rules
         run: |
           php -d "extension=$PWD/target/release/libwasm.so" examples/quickjs/checkout.php | grep -q '"gross": 3688'
+      - run: examples/oxipng/download.sh
+      - name: Optimise a PNG
+        run: |
+          php -d "extension=$PWD/target/release/libwasm.so" examples/oxipng/optimise.php | grep -q '262488 bytes -> 758 bytes'
       - name: Build and run the Rust example
         run: |
           examples/rust-markdown/build.sh
