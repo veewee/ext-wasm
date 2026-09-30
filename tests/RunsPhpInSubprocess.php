@@ -19,7 +19,9 @@ trait RunsPhpInSubprocess
         file_put_contents($file, $code);
         $command = [PHP_BINARY, '-n', '-d', 'extension=' . self::extensionUnderTest()];
         foreach ($settings as $name => $value) {
-            array_push($command, '-d', "$name=$value");
+            // Quoted, because INI syntax gives characters such as ~ in Windows
+            // short paths a meaning of their own.
+            array_push($command, '-d', $name . '="' . addcslashes($value, '"\\') . '"');
         }
         $command[] = $file;
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
