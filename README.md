@@ -86,8 +86,8 @@ $memory->grow(1);              // previous size in pages
 $memory->byteLength();
 $memory->buffer();             // a copy of the whole memory
 
-$table = new Wasm\Table(['element' => 'anyfunc', 'initial' => 2]);
-$table->set(0, $exports->add);
+$table = new Wasm\Table(['element' => 'anyfunc', 'initial' => 2], $exports->add);
+$table->set(1, $exports->add);
 $table->get(0);                // Wasm\Func
 $table->grow(1);
 $table->length();
@@ -97,6 +97,26 @@ $global->value = 43;
 ```
 
 `Global` is a reserved word in PHP, which is why the class is called `GlobalVar`. PHP has no shared `ArrayBuffer`, so memory is read and written through copies instead of a live view.
+
+### Stores
+
+wasmtime keeps wasm objects in stores and frees memory one whole store at a time. The extension picks a store for every object you create:
+
+- an instance joins the store of the `Memory`, `Table`, `GlobalVar`, `Tag` or `Func` objects it imports, and gets a store of its own when it imports none,
+- a `Table` or `GlobalVar` joins the store of the function it starts with, as `$table` does above,
+- any other `Memory`, `Table`, `GlobalVar` or `Tag` goes into one store that all such standalone objects share, so they can be imported together as in JS,
+- the exports of an instance live in the store of that instance.
+
+Dropping an instance together with its exports frees its memory, also in a long-running worker. Objects from two stores cannot be combined, so filling a standalone table with functions of an unrelated instance throws a `LinkError`. Group such objects in a `Wasm\Store`:
+
+```php
+$store = new Wasm\Store();
+$math = new Wasm\Instance($mathModule, store: $store);
+$table = new Wasm\Table(['element' => 'anyfunc', 'initial' => 1], store: $store);
+$table->set(0, $math->exports->double);
+```
+
+`Memory`, `Table`, `GlobalVar`, `Tag` and `Instance` all accept `store:`. A store lives as long as any object in it or a `Wasm\Store` object for it. JS has no stores and lets any objects be combined.
 
 ### Values
 
@@ -116,7 +136,7 @@ Conversion is strict where JS coerces: passing `'1'` or `1.5` for an `i32` throw
 Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 - `CompileError` for invalid wasm or WAT,
-- `LinkError` for missing or mismatched imports,
+- `LinkError` for missing or mismatched imports, and for combining objects of two stores,
 - `RuntimeError` for traps such as `unreachable`, out of bounds access or stack exhaustion, with the wasm backtrace in the message,
 - `WasmThrow` for a wasm exception (the exception handling proposal) that reaches PHP. It carries `$tag` and `$payload`. A PHP callback can throw `new WasmThrow($tag, $payload)` for wasm code to catch.
 
@@ -143,7 +163,7 @@ The cache holds machine code that runs inside the PHP process, so anyone who can
 ## Limits worth knowing
 
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.
-- All wasm objects in a PHP thread share one wasmtime store, so memories, tables and functions can be combined freely as in JS. wasmtime frees an instance only when its store goes away, which happens once no `Instance`, `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` is left. In PHP-FPM and the CLI that is the end of every request. In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store, and let instances go at the end of each request. Keeping one instance alive while creating new ones makes memory grow.
+- wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps the shared standalone store alive, and with it every instance that imports a standalone object. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance keeps that instance alive until the PHP process ends.
 - A PHP callback cannot switch fibers while wasm waits for it: `Fiber::suspend()` inside a callback throws a `FiberError`. Calling wasm from inside a fiber, and suspending between calls, works as usual.
 - WASI is not supported yet.
