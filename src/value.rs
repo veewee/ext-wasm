@@ -19,6 +19,8 @@ pub enum ConvertError {
     /// A wasm object from another store.
     Link(String),
     Runtime(String),
+    /// A plain `\Error`, such as using a dropped resource.
+    Error(String),
 }
 
 impl std::fmt::Display for ConvertError {
@@ -27,7 +29,8 @@ impl std::fmt::Display for ConvertError {
             Self::Type(message)
             | Self::Value(message)
             | Self::Link(message)
-            | Self::Runtime(message) => f.write_str(message),
+            | Self::Runtime(message)
+            | Self::Error(message) => f.write_str(message),
         }
     }
 }
@@ -41,6 +44,7 @@ impl From<ConvertError> for PhpException {
             ConvertError::Value(message) => value_error(message),
             ConvertError::Link(message) => link_error(message),
             ConvertError::Runtime(message) => runtime_error(wasmtime::Error::msg(message)),
+            ConvertError::Error(message) => crate::error::error(message),
         }
     }
 }

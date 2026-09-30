@@ -503,6 +503,70 @@ namespace Wasm\Component {
     }
 
     /**
+     * A handle to a resource owned by a component instance. Methods call the
+     * component; `drop()` releases the handle, as does the destructor.
+     */
+    class Resource {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        /**
+         * @return void
+         */
+        public function __clone(): void {}
+
+        public function __construct() {}
+
+        /**
+         * Calls the method `name` by its WIT name, for a method called `drop`.
+         *
+         * @param string $name
+         * @param mixed $args
+         * @return mixed
+         */
+        public function call(string $name, mixed ...$args): mixed {}
+
+        /**
+         * Releases the handle; the component runs its destructor for the resource.
+         *
+         * @return void
+         */
+        public function drop(): void {}
+    }
+
+    /**
+     * A resource type a component exports: `new(...)` constructs it, and its
+     * static functions are camelCase methods.
+     */
+    class ResourceClass {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        /**
+         * @return void
+         */
+        public function __clone(): void {}
+
+        public function __construct() {}
+
+        /**
+         * Calls the resource's constructor.
+         *
+         * @param mixed $args
+         * @return mixed
+         */
+        public function new(mixed ...$args): mixed {}
+    }
+
+    /**
      * A value of a WIT `result` inside another value: ok with a value, or err
      * with a payload.
      */

@@ -151,7 +151,7 @@ fn invoke(
     let args = params
         .iter()
         .zip(ty.params())
-        .map(|(param, (_, ty))| from_val(param, &ty))
+        .map(|(param, (_, ty))| from_val(ctx, param, &ty))
         .collect::<Result<Vec<Zval>, _>>()?;
 
     let returned = store.enter_component(ctx, || {
@@ -165,13 +165,13 @@ fn invoke(
         (Ok(_), None) => Ok(()),
         (Ok(value), Some(Type::Result(result))) => {
             let val = if downcast::<ResultValue>(value).is_some() {
-                to_val(value, &Type::Result(result))
+                to_val(ctx, value, &Type::Result(result))
             } else {
-                ok_payload(value, result.ok()).map(|payload| Val::Result(Ok(payload)))
+                ok_payload(ctx, value, result.ok()).map(|payload| Val::Result(Ok(payload)))
             };
             val.map(|val| results[0] = val).map_err(Into::into)
         }
-        (Ok(value), Some(result_ty)) => to_val(value, &result_ty)
+        (Ok(value), Some(result_ty)) => to_val(ctx, value, &result_ty)
             .map(|val| results[0] = val)
             .map_err(Into::into),
         // A ComponentError returns the err of a result to the component.
@@ -180,7 +180,7 @@ fn invoke(
             let payload: Zval = error
                 .get_property::<&Zval>("payload")
                 .map_or_else(|_| Zval::null(), Zval::shallow_clone);
-            let outcome = ok_payload(&payload, result.err())
+            let outcome = ok_payload(ctx, &payload, result.err())
                 .map(|payload| results[0] = Val::Result(Err(payload)))
                 .map_err(Into::into);
             thrown = Some((error, payload));
@@ -207,11 +207,12 @@ fn pending_component_error() -> bool {
 }
 
 fn ok_payload(
+    ctx: &mut StoreContextMut<'_, HostState>,
     value: &Zval,
     ty: Option<Type>,
 ) -> Result<Option<Box<Val>>, crate::value::ConvertError> {
     match ty {
-        Some(ty) => Ok(Some(Box::new(to_val(value, &ty)?))),
+        Some(ty) => Ok(Some(Box::new(to_val(ctx, value, &ty)?))),
         None => Ok(None),
     }
 }

@@ -291,15 +291,15 @@ final class ComponentValueTest extends TestCase
         self::assertInstanceOf(\Wasm\Exception\WasmException::class, $error);
     }
 
-    public function test_an_unsupported_type_is_named_and_other_functions_keep_working(): void
+    public function test_a_resource_parameter_needs_a_resource_and_other_functions_keep_working(): void
     {
         $exports = self::exports();
 
         try {
             $exports->takeThing(1);
-            self::fail('Expected a RuntimeError');
-        } catch (RuntimeError $error) {
-            self::assertStringContainsString('own<resource> is not supported yet', $error->getMessage());
+            self::fail('Expected a TypeError');
+        } catch (\TypeError $error) {
+            self::assertStringContainsString('expected Wasm\\Component\\Resource for own<resource>', $error->getMessage());
         }
         self::assertSame(1, $exports->idOption(1));
     }

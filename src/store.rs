@@ -204,6 +204,12 @@ pub struct StoreHandle {
     /// Values a parked call's callback handed back, dropped where PHP code may
     /// run: before the next callback, or once the store borrow ends.
     garbage: RefCell<Vec<Zval>>,
+    /// Component resource handles released while the store was in use, for
+    /// example by a PHP destructor during a call. Dropped after the call.
+    pending_drops: RefCell<Vec<wasmtime::component::ResourceAny>>,
+    /// The resource types component instances in this store export, so a
+    /// handle the component returns gets its methods.
+    pub resource_types: RefCell<Vec<Rc<crate::component::resource::ResourceMeta>>>,
 }
 
 pub type SharedStore = Rc<StoreHandle>;
@@ -266,6 +272,8 @@ pub fn new() -> SharedStore {
         request: RefCell::new(None),
         response: RefCell::new(None),
         garbage: RefCell::new(Vec::new()),
+        pending_drops: RefCell::new(Vec::new()),
+        resource_types: RefCell::new(Vec::new()),
     })
 }
 
@@ -376,8 +384,36 @@ impl StoreHandle {
             let mut scope = RootScope::new(&mut *store);
             f(scope.as_context_mut())
         };
+        self.drop_pending_resources();
         drop(self.collect());
         result
+    }
+
+    /// Releases a component resource handle, or queues it until the store is
+    /// free when a call is running: dropping runs the component's destructor,
+    /// which would enter the component again.
+    pub fn drop_resource(&self, handle: wasmtime::component::ResourceAny) {
+        let busy =
+            !matches!(self.active.get(), Active::None) || self.store.try_borrow_mut().is_err();
+        self.pending_drops.borrow_mut().push(handle);
+        if !busy {
+            self.drop_pending_resources();
+        }
+    }
+
+    fn drop_pending_resources(&self) {
+        loop {
+            let pending = std::mem::take(&mut *self.pending_drops.borrow_mut());
+            if pending.is_empty() {
+                return;
+            }
+            let mut store = self.store.borrow_mut();
+            for handle in pending {
+                // A handle of an instance that trapped cannot be dropped; the
+                // store frees it together with the instance.
+                let _ = handle.resource_drop(&mut *store);
+            }
+        }
     }
 
     /// Runs PHP code from inside a host function, routing store access through `caller`.

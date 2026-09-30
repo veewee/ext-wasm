@@ -95,6 +95,8 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<component::exports::ExportsIterator>()
         .class::<component::exports::Exports>()
         .class::<component::instance::Instance>()
+        .class::<component::resource::ResourceClass>()
+        .class::<component::resource::Resource>()
         .class::<component::value::Variant>()
         .class::<component::value::ResultValue>()
         .class::<store::StoreObject>()

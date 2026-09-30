@@ -8,7 +8,10 @@ use wasmtime::component::types::{ComponentExtern, ComponentItem};
 use wasmtime::component::{ComponentExportIndex, Instance};
 use wasmtime::{AsContextMut, StoreContextMut};
 
+use std::rc::Rc;
+
 use crate::component::func::Func;
+use crate::component::resource::{ResourceClass, ResourceMeta, is_resource_function};
 use crate::component::value::camel;
 use crate::engine::engine;
 use crate::error::error;
@@ -36,25 +39,57 @@ impl Exports {
         parent: Option<&ComponentExportIndex>,
         items: impl Iterator<Item = (&'a str, ComponentExtern<'a>)>,
     ) -> PhpResult<Self> {
+        let items: Vec<(&str, ComponentExtern<'a>)> = items.collect();
+        // Functions first: a resource type collects its constructor, static
+        // functions and methods from them.
+        let mut functions = Vec::new();
+        for (name, item) in &items {
+            if let ComponentItem::ComponentFunc(_) = item.ty
+                && let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name)
+                && let Some(inner) = instance.get_func(ctx.as_context_mut(), index)
+            {
+                functions.push((name.to_string(), inner));
+            }
+        }
         let mut entries = Vec::new();
         for (name, item) in items {
-            let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name) else {
-                continue;
-            };
             let object = match &item.ty {
                 ComponentItem::ComponentFunc(_) => {
-                    let Some(inner) = instance.get_func(ctx.as_context_mut(), index) else {
+                    if is_resource_function(name) {
+                        continue;
+                    }
+                    let Some((_, inner)) = functions.iter().find(|(export, _)| export == name)
+                    else {
                         continue;
                     };
                     Func {
                         store: store.clone(),
-                        inner,
+                        inner: *inner,
                     }
                     .into_zval(false)?
                 }
                 ComponentItem::ComponentInstance(nested) => {
+                    let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name)
+                    else {
+                        continue;
+                    };
                     Self::new(store, ctx, instance, Some(&index), nested.exports(engine()))?
                         .into_zval(false)?
+                }
+                ComponentItem::Resource(_) => {
+                    // The type of the instance, which the handles it returns carry.
+                    let Some((ComponentItem::Resource(ty), _)) =
+                        instance.get_export(ctx.as_context_mut(), parent, name)
+                    else {
+                        continue;
+                    };
+                    let meta = Rc::new(ResourceMeta::new(store, name, ty, &functions));
+                    store.resource_types.borrow_mut().push(meta.clone());
+                    ResourceClass {
+                        store: store.clone(),
+                        meta,
+                    }
+                    .into_zval(false)?
                 }
                 _ => continue,
             };

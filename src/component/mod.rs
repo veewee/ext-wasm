@@ -6,6 +6,7 @@ pub mod func;
 pub mod http;
 pub mod imports;
 pub mod instance;
+pub mod resource;
 pub mod value;
 
 use ext_php_rs::binary_slice::BinarySlice;

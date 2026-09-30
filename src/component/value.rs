@@ -7,12 +7,17 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ArrayKey, ZendHashTable, Zval};
+use wasmtime::StoreContextMut;
 use wasmtime::component::Val;
 use wasmtime::component::types::Type;
 
 use crate::component::error::thrown;
+use std::rc::Rc;
+
+use crate::component::resource::{self, Resource};
 use crate::component::wit_type;
 use crate::error::error;
+use crate::store::{self, HostState};
 use crate::value::{ConvertError, debug_type, downcast};
 
 /// A value of a WIT `variant`: the name of its case and the case's payload.
@@ -113,7 +118,11 @@ impl ResultValue {
 }
 
 /// Converts a PHP value to a component value of type `ty`.
-pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
+pub fn to_val(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    value: &Zval,
+    ty: &Type,
+) -> Result<Val, ConvertError> {
     Ok(match ty {
         Type::Bool => Val::Bool(
             value
@@ -169,7 +178,7 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
             Val::List(
                 list_array(value, ty)?
                     .values()
-                    .map(|item| to_val(item, &element))
+                    .map(|item| to_val(ctx, item, &element))
                     .collect::<Result<_, _>>()?,
             )
         }
@@ -187,7 +196,7 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
                 items
                     .values()
                     .zip(tuple.types())
-                    .map(|(item, ty)| to_val(item, &ty))
+                    .map(|(item, ty)| to_val(ctx, item, &ty))
                     .collect::<Result<_, _>>()?,
             )
         }
@@ -201,7 +210,7 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
             for field in record.fields() {
                 let key = camel(field.name);
                 let val = match fields.get(key.as_str()) {
-                    Some(item) => to_val(item, &field.ty)?,
+                    Some(item) => to_val(ctx, item, &field.ty)?,
                     None if matches!(field.ty, Type::Option(_)) => Val::Option(None),
                     None => {
                         return Err(ConvertError::Type(format!(
@@ -221,7 +230,7 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
                 .find(|case| case.name == given.tag)
                 .ok_or_else(|| unknown_case(&given.tag, ty))?;
             let payload = match &case.ty {
-                Some(payload) => Some(Box::new(to_val(&given.value, payload)?)),
+                Some(payload) => Some(Box::new(to_val(ctx, &given.value, payload)?)),
                 None => None,
             };
             Val::Variant(given.tag.clone(), payload)
@@ -243,18 +252,18 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
                 let given = downcast::<Variant>(value).ok_or_else(|| mismatch(value, ty))?;
                 let nested = match given.tag.as_str() {
                     "none" => Val::Option(None),
-                    "some" => Val::Option(Some(Box::new(to_val(&given.value, &nested.ty())?))),
+                    "some" => Val::Option(Some(Box::new(to_val(ctx, &given.value, &nested.ty())?))),
                     other => return Err(unknown_case(other, ty)),
                 };
                 return Ok(Val::Option(Some(Box::new(nested))));
             }
-            Val::Option(Some(Box::new(to_val(value, &inner)?)))
+            Val::Option(Some(Box::new(to_val(ctx, value, &inner)?)))
         }
         Type::Result(result) => {
             let given = downcast::<ResultValue>(value).ok_or_else(|| mismatch(value, ty))?;
             let payload_ty = if given.ok { result.ok() } else { result.err() };
             let payload = match payload_ty {
-                Some(payload_ty) => Some(Box::new(to_val(&given.value, &payload_ty)?)),
+                Some(payload_ty) => Some(Box::new(to_val(ctx, &given.value, &payload_ty)?)),
                 None => None,
             };
             Val::Result(if given.ok { Ok(payload) } else { Err(payload) })
@@ -281,12 +290,33 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
             }
             Val::Flags(set)
         }
+        Type::Own(resource_ty) | Type::Borrow(resource_ty) => {
+            let resource = downcast::<Resource>(value).ok_or_else(|| mismatch(value, ty))?;
+            let handle = resource
+                .handle()
+                .map_err(|message| ConvertError::Error(message.to_string()))?;
+            if !Rc::ptr_eq(resource.store(), &store::of(&*ctx)) || handle.ty() != *resource_ty {
+                return Err(ConvertError::Type(format!(
+                    "expected a resource of the type {} expects, got one of another type or instance",
+                    wit_type(ty)
+                )));
+            }
+            if matches!(ty, Type::Own(_)) {
+                Val::Resource(resource::take_for_own(resource).map_err(ConvertError::Value)?)
+            } else {
+                Val::Resource(handle)
+            }
+        }
         other => return Err(unsupported(other)),
     })
 }
 
 /// Converts a component value of type `ty` to PHP.
-pub fn from_val(val: &Val, ty: &Type) -> Result<Zval, ConvertError> {
+pub fn from_val(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    val: &Val,
+    ty: &Type,
+) -> Result<Zval, ConvertError> {
     let object = |object: std::result::Result<Zval, ext_php_rs::error::Error>| {
         object.map_err(|err| ConvertError::Value(err.to_string()))
     };
@@ -305,21 +335,21 @@ pub fn from_val(val: &Val, ty: &Type) -> Result<Zval, ConvertError> {
         }
         (Val::List(items), Type::List(list)) => {
             let element = list.ty();
-            return list_of(items.iter().map(|item| from_val(item, &element)));
+            return list_of(items.iter().map(|item| from_val(ctx, item, &element)));
         }
         (Val::Tuple(items), Type::Tuple(tuple)) => {
             return list_of(
                 items
                     .iter()
                     .zip(tuple.types())
-                    .map(|(item, ty)| from_val(item, &ty)),
+                    .map(|(item, ty)| from_val(ctx, item, &ty)),
             );
         }
         (Val::Record(fields), Type::Record(record)) => {
             let mut table = ZendHashTable::new();
             for ((name, item), field) in fields.iter().zip(record.fields()) {
                 table
-                    .insert(camel(name).as_str(), from_val(item, &field.ty)?)
+                    .insert(camel(name).as_str(), from_val(ctx, item, &field.ty)?)
                     .map_err(|err| ConvertError::Value(err.to_string()))?;
             }
             return object(table.into_zval(false));
@@ -330,7 +360,7 @@ pub fn from_val(val: &Val, ty: &Type) -> Result<Zval, ConvertError> {
                 .find(|case| case.name == tag)
                 .and_then(|case| case.ty);
             let value = match (payload, payload_ty) {
-                (Some(payload), Some(payload_ty)) => from_val(payload, &payload_ty)?,
+                (Some(payload), Some(payload_ty)) => from_val(ctx, payload, &payload_ty)?,
                 _ => Zval::null(),
             };
             return object(
@@ -357,12 +387,12 @@ pub fn from_val(val: &Val, ty: &Type) -> Result<Zval, ConvertError> {
                     },
                     Some(value) => Variant {
                         tag: "some".into(),
-                        value: from_val(value, &nested.ty())?,
+                        value: from_val(ctx, value, &nested.ty())?,
                     },
                 };
                 return object(variant.into_zval(false));
             }
-            return from_val(inner, &inner_ty);
+            return from_val(ctx, inner, &inner_ty);
         }
         (Val::Result(outcome), Type::Result(result)) => {
             let (ok, payload, payload_ty) = match outcome {
@@ -370,10 +400,25 @@ pub fn from_val(val: &Val, ty: &Type) -> Result<Zval, ConvertError> {
                 Err(payload) => (false, payload, result.err()),
             };
             let value = match (payload, payload_ty) {
-                (Some(payload), Some(payload_ty)) => from_val(payload, &payload_ty)?,
+                (Some(payload), Some(payload_ty)) => from_val(ctx, payload, &payload_ty)?,
                 _ => Zval::null(),
             };
             return object(ResultValue { ok, value }.into_zval(false));
+        }
+        (Val::Resource(handle), Type::Own(_) | Type::Borrow(_)) => {
+            if !handle.owned() {
+                return Err(ConvertError::Runtime(
+                    "borrowed resources of another component are not supported yet".into(),
+                ));
+            }
+            let store = store::of(&*ctx);
+            let meta = store
+                .resource_types
+                .borrow()
+                .iter()
+                .find(|meta| meta.ty == handle.ty())
+                .cloned();
+            return object(Resource::new(store, meta, *handle).into_zval(false));
         }
         (Val::Flags(set), Type::Flags(flags)) => {
             let mut table = ZendHashTable::new();
@@ -502,13 +547,17 @@ unsafe extern "C" {
 
 /// A top-level `result` return: the ok value, or its err thrown as a
 /// ComponentError.
-pub fn unwrap_result(val: &Val, ty: &Type) -> PhpResult<Zval> {
+pub fn unwrap_result(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    val: &Val,
+    ty: &Type,
+) -> PhpResult<Zval> {
     let (Val::Result(outcome), Type::Result(result)) = (val, ty) else {
-        return Ok(from_val(val, ty)?);
+        return Ok(from_val(ctx, val, ty)?);
     };
-    let payload = |payload: &Option<Box<Val>>, payload_ty: Option<Type>| -> PhpResult<Zval> {
+    let mut payload = |payload: &Option<Box<Val>>, payload_ty: Option<Type>| -> PhpResult<Zval> {
         Ok(match (payload, payload_ty) {
-            (Some(payload), Some(payload_ty)) => from_val(payload, &payload_ty)?,
+            (Some(payload), Some(payload_ty)) => from_val(ctx, payload, &payload_ty)?,
             _ => Zval::null(),
         })
     };
@@ -600,6 +649,7 @@ fn php_type(ty: &Type) -> &'static str {
         Type::Record(_) | Type::Flags(_) => "array",
         Type::Variant(_) | Type::Option(_) => "Wasm\\Component\\Variant",
         Type::Result(_) => "Wasm\\Component\\Result",
+        Type::Own(_) | Type::Borrow(_) => "Wasm\\Component\\Resource",
         _ => "int",
     }
 }

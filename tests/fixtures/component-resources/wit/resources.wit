@@ -1,0 +1,35 @@
+package docs:demo@0.1.0;
+
+interface counters {
+    resource counter {
+        constructor(start: u32);
+        increment: func() -> u32;
+        value: func() -> u32;
+        zero: static func() -> counter;
+    }
+
+    total: func(a: borrow<counter>, b: borrow<counter>) -> u32;
+    consume: func(c: counter) -> u32;
+    dropped: func() -> u32;
+}
+
+interface log {
+    resource logger {
+        constructor(prefix: string);
+        write: func(line: string) -> string;
+    }
+}
+
+/// A component with guest resources only.
+world counting {
+    export counters;
+}
+
+/// A component that uses a resource the host implements.
+world logging {
+    import log;
+    use log.{logger};
+    export uses-logger: func(prefix: string, line: string) -> string;
+    export echo-logger: func(l: logger) -> logger;
+    export borrow-logger: func(l: borrow<logger>, line: string) -> string;
+}
