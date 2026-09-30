@@ -21,6 +21,38 @@ final class ComponentCompositionTest extends TestCase
 {
     private const FIXTURES = __DIR__ . '/fixtures/component-resources/';
 
+    /** Exports run(n), which returns later(n) + 1. */
+    private const SUSPENDS = <<<'WAT'
+        (component
+          (import "later" (func $later (param "n" u32) (result u32)))
+          (core func $later-core (canon lower (func $later)))
+          (core module $m
+            (import "host" "later" (func $later (param i32) (result i32)))
+            (func (export "run") (param i32) (result i32) (i32.add (call $later (local.get 0)) (i32.const 1))))
+          (core instance $i (instantiate $m (with "host" (instance (export "later" (func $later-core))))))
+          (func (export "run") (param "n" u32) (result u32) (canon lift (core func $i "run"))))
+        WAT;
+
+    /** Exports a resource thing with only a constructor. */
+    private const THING = <<<'WAT'
+        (component
+          (type $thing' (resource (rep i32)))
+          (core func $new (canon resource.new $thing'))
+          (core module $m
+            (import "host" "new" (func $new (param i32) (result i32)))
+            (func (export "ctor") (param i32) (result i32) (call $new (local.get 0))))
+          (core instance $i (instantiate $m (with "host" (instance (export "new" (func $new))))))
+          (export $thing "thing" (type $thing'))
+          (func (export "[constructor]thing") (param "start" u32) (result (own $thing)) (canon lift (core func $i "ctor"))))
+        WAT;
+
+    private static function suspends(): Exports
+    {
+        return (new Instance(new Component(self::SUSPENDS), [
+            'later' => new Suspending(fn (int $n): int => \Fiber::suspend() + $n),
+        ]))->exports;
+    }
+
     /** The counters interface of a fresh counters instance. */
     private static function counters(): Exports
     {
@@ -191,6 +223,44 @@ final class ComponentCompositionTest extends TestCase
         $this->expectException(LinkError::class);
         $this->expectExceptionMessage('the exported interface given for "docs:demo/counters@0.1.0" has no resource "counter"');
         self::composer($instance->exports);
+    }
+
+    public function test_a_call_through_a_suspending_import_may_suspend_in_the_exporter(): void
+    {
+        $counters = self::counters();
+        $exporter = self::suspends();
+        $composer = self::composer([
+            'counter' => $counters->get('counter'),
+            'total' => new Suspending(fn (Resource $a, Resource $b): int => $exporter->run($a->value())),
+        ]);
+
+        $fiber = new \Fiber(fn (): int => $composer->totalOf($counters->get('counter')->new(1), $counters->get('counter')->new(2)));
+        $fiber->start();
+        $fiber->resume(5);
+
+        self::assertSame(7, $fiber->getReturn());
+    }
+
+    public function test_a_call_through_a_plain_import_cannot_suspend_in_the_exporter(): void
+    {
+        $counters = self::counters();
+        $exporter = self::suspends();
+        $composer = self::composer([
+            'counter' => $counters->get('counter'),
+            'total' => fn (Resource $a, Resource $b): int => $exporter->run($a->value()),
+        ]);
+
+        $this->expectException(\FiberError::class);
+        (new \Fiber(fn (): int => $composer->totalOf($counters->get('counter')->new(1), $counters->get('counter')->new(2))))->start();
+    }
+
+    public function test_a_resource_class_lacking_an_imported_method_is_a_link_error(): void
+    {
+        $thing = (new Instance(new Component(self::THING)))->exports->get('thing');
+
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('the resource "thing" given for "docs:demo/counters@0.1.0#[method]counter.');
+        self::composer(['counter' => $thing, 'total' => fn (): int => 0]);
     }
 
     public function test_an_interface_missing_a_function_is_a_link_error(): void
