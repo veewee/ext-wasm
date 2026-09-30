@@ -122,7 +122,7 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature. [examples/mago](examples/mago) runs the formatter and static analyzer of [mago](https://github.com/carthage-software/mago) from its official wasm build.
+The [examples](examples) folder has small scripts for each feature. [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
 
 ## Limits worth knowing
 
