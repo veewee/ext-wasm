@@ -62,6 +62,21 @@ jobs:
           done
           [ "$failures" = 0 ]
 
+  doom:
+    name: DOOM example, headless
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          php: '8.4'
+      - run: cargo build --release --locked
+      - run: examples/doom/download.sh
+      - name: Run 100 game ticks
+        run: php -d "extension=$PWD/target/release/libwasm.so" examples/doom/doom.php --ticks=100 --screenshot=title.ppm
+      - name: Check a frame was drawn
+        run: test "$(head -c 2 title.ppm)" = P6
+
   lint:
     name: Clippy and rustfmt
     runs-on: ubuntu-latest
