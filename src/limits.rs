@@ -25,9 +25,8 @@ pub fn memory_limit() -> Option<u64> {
 pub struct MemoryBudget {
     limit: Option<u64>,
     used: u64,
-    /// What the last growth was granted, taken back when wasmtime reports
-    /// that it failed after all, for example past the memory's own maximum.
-    pending: Option<u64>,
+    /// `used` before the operation that `reset` started, for `undo`.
+    before: u64,
     /// Set when the limit refused a growth, so the error can name it.
     refused: bool,
 }
@@ -43,22 +42,29 @@ impl MemoryBudget {
         }
     }
 
-    fn grow(&mut self, bytes: u64) -> bool {
-        self.pending = None;
+    /// Charges a growth to `desired`. A growth past `maximum` is granted
+    /// without charging it, because wasmtime refuses it right after; a
+    /// growth that fails for another reason after this stays charged, since
+    /// wasmtime reports some failures without asking the limiter first, and
+    /// taking back a charge then would undo one that did happen.
+    fn grow(&mut self, current: usize, desired: usize, maximum: Option<usize>, unit: u64) -> bool {
+        if maximum.is_some_and(|maximum| desired > maximum) {
+            return true;
+        }
+        let bytes = (desired.saturating_sub(current) as u64).saturating_mul(unit);
         let wanted = self.used.saturating_add(bytes);
         if self.limit.is_some_and(|limit| wanted > limit) {
             self.refused = true;
             return false;
         }
         self.used = wanted;
-        self.pending = Some(bytes);
         true
     }
 
-    fn failed(&mut self) {
-        if let Some(bytes) = self.pending.take() {
-            self.used -= bytes;
-        }
+    /// Gives back what the operation since `reset` charged, after it failed
+    /// and freed its memory again.
+    pub fn undo(&mut self) {
+        self.used = self.before;
     }
 
     /// Replaces `err` with one naming the limit when the limit caused it.
@@ -71,9 +77,11 @@ impl MemoryBudget {
         }
     }
 
-    /// Forgets a refusal from before the operation about to start.
+    /// Starts an operation: forgets an earlier refusal and remembers the
+    /// budget for `undo`.
     pub fn reset(&mut self) {
         self.refused = false;
+        self.before = self.used;
     }
 }
 
@@ -82,42 +90,18 @@ impl wasmtime::ResourceLimiter for MemoryBudget {
         &mut self,
         current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        Ok(self.grow(desired.saturating_sub(current) as u64))
-    }
-
-    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.failed();
-        Ok(())
+        Ok(self.grow(current, desired, maximum, 1))
     }
 
     fn table_growing(
         &mut self,
         current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        Ok(self.grow((desired.saturating_sub(current) as u64).saturating_mul(TABLE_ELEMENT)))
-    }
-
-    fn table_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.failed();
-        Ok(())
-    }
-
-    // wasmtime counts these only once a store has a limiter, and stores had
-    // none before wasm.memory_limit, so they stay unlimited.
-    fn instances(&self) -> usize {
-        usize::MAX
-    }
-
-    fn tables(&self) -> usize {
-        usize::MAX
-    }
-
-    fn memories(&self) -> usize {
-        usize::MAX
+        Ok(self.grow(current, desired, maximum, TABLE_ELEMENT))
     }
 }
 
@@ -128,7 +112,11 @@ pub fn limited<T>(
     f: impl FnOnce(&mut StoreContextMut<'_, HostState>) -> wasmtime::Result<T>,
 ) -> wasmtime::Result<T> {
     ctx.data_mut().memory.reset();
-    f(ctx).map_err(|err| ctx.data_mut().memory.explain(err))
+    f(ctx).map_err(|err| {
+        let memory = &mut ctx.data_mut().memory;
+        memory.undo();
+        memory.explain(err)
+    })
 }
 
 const SUCCESS: c_int = 0;

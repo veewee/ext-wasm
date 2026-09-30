@@ -64,6 +64,33 @@ final class LimitsTest extends TestCase
         self::assertSame(0, $exports->growTable(1000));
     }
 
+    public function test_a_table_grow_that_overflows_keeps_what_was_granted(): void
+    {
+        ini_set('wasm.memory_limit', '1M');
+        $exports = (new Instance(new Module(<<<'WAT'
+            (module
+              (table $t i64 1 funcref)
+              (func (export "grow") (param i64) (result i64) (table.grow $t (ref.null func) (local.get 0))))
+            WAT)))->exports;
+
+        self::assertSame(1, $exports->grow(100_000));
+        self::assertSame(-1, $exports->grow(-1));
+        self::assertSame(-1, $exports->grow(100_000));
+    }
+
+    public function test_a_failed_instantiation_gives_its_memory_back_to_the_store(): void
+    {
+        ini_set('wasm.memory_limit', '1M');
+        $store = new \Wasm\Store();
+
+        try {
+            new Instance(new Module('(module (memory 10) (memory 10))'), store: $store);
+            self::fail('both memories fit');
+        } catch (LinkError) {
+        }
+        self::assertInstanceOf(Instance::class, new Instance(new Module('(module (memory 10))'), store: $store));
+    }
+
     public function test_an_initial_memory_over_the_limit_is_a_link_error(): void
     {
         ini_set('wasm.memory_limit', '1M');
