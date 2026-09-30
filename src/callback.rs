@@ -66,7 +66,10 @@ fn invoke(
 
     // Releasing these can run PHP destructors, which may use wasm objects again.
     // The outer call still holds the store, so they run inside the host context.
-    store.enter_host(caller, move || drop((returned, args, callable, released)));
+    store.enter_host(caller, move || {
+        let _no_fiber_switch = FiberSwitchBlock::new();
+        drop((returned, args, callable, released));
+    });
     outcome
 }
 

@@ -32,6 +32,24 @@ final class FiberTest extends TestCase
         $fiber->start();
     }
 
+    public function test_a_destructor_run_after_a_callback_cannot_switch_fibers(): void
+    {
+        $exports = (new Instance(new Module(self::SUSPENDING_IMPORT), [
+            // The returned object is released after the callback, when its destructor runs.
+            'env' => ['wait' => fn () => new class {
+                public function __destruct()
+                {
+                    \Fiber::suspend();
+                }
+            }],
+        ]))->exports;
+
+        $fiber = new \Fiber(fn () => $exports->run());
+
+        $this->expectException(\FiberError::class);
+        $fiber->start();
+    }
+
     public function test_interleaved_fibers_cannot_crash_the_process(): void
     {
         $script = <<<'PHP'
