@@ -24,12 +24,13 @@ if (!is_file($wasm)) {
 
 $module = new Wasm\Module(file_get_contents($wasm));
 
-// The build is made for JavaScript and declares JS helper functions as imports.
-// Formatting never calls them, so every import is a stub that fails loudly.
+// The module declares imports that its generated JS glue normally provides.
+// Instantiating requires a value for every declared import, but formatting
+// never calls them, so each one is a stub that fails loudly if it ever is.
 $imports = [];
 foreach (Wasm\Module::imports($module) as $import) {
     $imports[$import['module']][$import['name']] = static function () use ($import): never {
-        throw new RuntimeException("mago needed the JavaScript helper {$import['name']}, which usually means the input could not be formatted");
+        throw new RuntimeException("mago called its import {$import['name']}, which it only does when the input cannot be formatted");
     };
 }
 $mago = (new Wasm\Instance($module, $imports))->exports;
