@@ -6,3 +6,4 @@ tools/*.phar binary
 /examples/doom/dist/
 /examples/python/dist/
 /examples/quickjs/dist/
+/examples/rust-markdown/target/

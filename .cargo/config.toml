@@ -1,4 +1,4 @@
-[target.'cfg(not(target_os = "windows"))']
+[target.'cfg(not(any(target_os = "windows", target_family = "wasm")))']
 rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
 
 [target.x86_64-pc-windows-msvc]
