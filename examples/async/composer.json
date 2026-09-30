@@ -1,0 +1,9 @@
+{
+    "name": "veewee/ext-wasm-async-example",
+    "description": "Ten concurrent lookups from wasm through Wasm\\Suspending and Amp",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "amphp/amp": "^3.1"
+    }
+}

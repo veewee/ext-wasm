@@ -115,6 +115,10 @@ jobs:
           examples/typst/build.sh
           php -d "extension=$PWD/target/release/libwasm.so" examples/typst/invoice.php invoice.pdf
           test "$(head -c 5 invoice.pdf)" = %PDF-
+      - name: Run concurrent lookups through Amp
+        run: |
+          composer install -d examples/async --no-interaction --no-progress
+          php -d "extension=$PWD/target/release/libwasm.so" examples/async/lookup.php | grep -qx concurrent
 
   lint:
     name: Clippy and rustfmt

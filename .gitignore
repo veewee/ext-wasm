@@ -11,3 +11,5 @@ tools/*.phar binary
 /examples/html/target/
 /examples/typst/target/
 /examples/typst/dist/
+/examples/async/vendor/
+/examples/async/composer.lock
