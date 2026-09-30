@@ -37,7 +37,8 @@ final class ComponentHttpTest extends TestCase
             [0 => ['pipe', 'r'], 1 => ['file', self::nullDevice(), 'w'], 2 => ['file', self::nullDevice(), 'w']],
             $pipes,
             null,
-            ['HTTP_TEST_LOG' => self::$log],
+            // The whole environment: without SystemRoot, sockets fail on Windows.
+            getenv() + ['HTTP_TEST_LOG' => self::$log],
         );
         self::waitForPort(self::$port);
     }
