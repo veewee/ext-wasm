@@ -12,7 +12,7 @@ use ext_php_rs::convert::IntoZval;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::{ZendHashTable, Zval};
+use ext_php_rs::types::{ArrayKey, ZendHashTable, Zval};
 use wasmtime::Linker;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
@@ -61,9 +61,7 @@ impl Wasi {
             Some(limit) => usize::try_from(limit)
                 .map_err(|_| value_error("outputLimit must not be negative"))?,
         };
-        // One byte of headroom tells a full buffer from one that overflowed:
-        // the pipe answers writes past its capacity with an I/O error the
-        // program may ignore, so the overflow is reported after the run.
+        // One byte of headroom tells a full buffer from one that overflowed; see `check_output`.
         let stdout = MemoryOutputPipe::new(output_limit + 1);
         let stderr = MemoryOutputPipe::new(output_limit + 1);
         let mut builder = WasiCtxBuilder::new();
@@ -78,6 +76,11 @@ impl Wasi {
             builder.env(key.to_string(), value);
         }
         for (guest, spec) in preopens.map(ZendHashTable::iter).into_iter().flatten() {
+            if let ArrayKey::Long(_) = guest {
+                return Err(type_error(
+                    "preopens must map guest paths to host paths, like ['/data' => '/srv/data']",
+                ));
+            }
             let (host, writable) = match spec.array() {
                 Some(options) => (
                     options.get("path").and_then(Zval::str).ok_or_else(|| {
@@ -144,15 +147,7 @@ impl Wasi {
                     None => Err(call_error(&mut ctx, err)),
                 },
             })?;
-        if [&self.stdout, &self.stderr]
-            .iter()
-            .any(|pipe| pipe.contents().len() > self.output_limit)
-        {
-            return Err(runtime_error(wasmtime::Error::msg(format!(
-                "wasm program output exceeded the limit of {} bytes",
-                self.output_limit
-            ))));
-        }
+        self.check_output()?;
         Ok(code)
     }
 
@@ -168,7 +163,8 @@ impl Wasi {
         self.store.with(|mut ctx| {
             func.call(&mut ctx, &[], &mut [])
                 .map_err(|err| call_error(&mut ctx, err))
-        })
+        })?;
+        self.check_output()
     }
 
     pub fn stdout(&self) -> Binary<u8> {
@@ -193,6 +189,21 @@ impl Wasi {
             ));
         }
         Ok(exports.func(name))
+    }
+
+    /// The pipes answer writes past the limit with an I/O error the program
+    /// may ignore, so an overflow is reported once the call returns.
+    fn check_output(&self) -> PhpResult<()> {
+        if [&self.stdout, &self.stderr]
+            .iter()
+            .any(|pipe| pipe.contents().len() > self.output_limit)
+        {
+            return Err(runtime_error(wasmtime::Error::msg(format!(
+                "wasm program output exceeded the limit of {} bytes",
+                self.output_limit
+            ))));
+        }
+        Ok(())
     }
 
     fn captured(&self, pipe: &MemoryOutputPipe) -> Binary<u8> {

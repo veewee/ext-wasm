@@ -24,7 +24,10 @@ pub struct HostState {
 
 // SAFETY: wasmtime-wasi requires Send store data. A store is created, used and
 // dropped on one PHP thread and never handed to another, so the Rc and raw
-// pointers inside are never touched from two threads.
+// pointers inside are never touched from two threads. This holds for the sync
+// p1 functions with in-memory stdio and `allow_blocking_current_thread`, which
+// run every host call on the calling thread; async WASI or streaming stdio
+// would need this revisited.
 unsafe impl Send for HostState {}
 
 /// A tag's PHP object, held without a reference.

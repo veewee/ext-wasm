@@ -250,6 +250,26 @@ final class WasiTest extends TestCase
         self::assertSame(42, $instance->exports->answer());
     }
 
+    public function test_output_past_the_limit_in_initialize_is_a_runtime_error(): void
+    {
+        $wasi = new Wasi(outputLimit: 2);
+        $instance = $this->instance($wasi, <<<'EOWAT'
+            (data (i32.const 1024) "hello")
+            (func (export "_initialize") (call $write (i32.const 1) (i32.const 1024) (i32.const 5)))
+            EOWAT);
+
+        $this->expectException(\Wasm\Exception\RuntimeError::class);
+        $this->expectExceptionMessage('exceeded the limit of 2 bytes');
+        $wasi->initialize($instance);
+    }
+
+    public function test_preopens_need_guest_paths_as_keys(): void
+    {
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessageMatches('/guest path/');
+        new Wasi(preopens: [self::tempDir()]);
+    }
+
     public static function tempDir(): string
     {
         $dir = sys_get_temp_dir() . '/wasm-wasi-' . uniqid();
