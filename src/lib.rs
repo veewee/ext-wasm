@@ -40,7 +40,33 @@ static INI_ENTRIES: IniEntryDefs<3> = IniEntryDefs::new([
 
 fn startup(_type: i32, module_number: i32) -> i32 {
     IniEntryDef::register(INI_ENTRIES.as_slice(), module_number);
+    #[cfg(windows)]
+    pin_module();
     0
+}
+
+/// Keeps this DLL loaded until the process exits.
+///
+/// PHP unloads extensions at shutdown, but wasmtime's compile and cache threads
+/// may still be running code from this DLL then, and they crashed with an
+/// access violation once it was gone. The crash only showed on Windows, and
+/// not at all with ZEND_DONT_UNLOAD_MODULES set.
+#[cfg(windows)]
+fn pin_module() {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    };
+
+    let mut module = std::ptr::null_mut();
+    // SAFETY: the address of a function in this DLL identifies it, and the
+    // handle is only written, never used.
+    unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            pin_module as *const () as *const u16,
+            &mut module,
+        );
+    }
 }
 
 extern "C" fn request_startup(_type: i32, _module_number: i32) -> i32 {

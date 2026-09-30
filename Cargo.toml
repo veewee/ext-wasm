@@ -19,5 +19,8 @@ wasmparser = { version = "=0.258.0", default-features = false, features = ["std"
 wat = "=1.259.0"
 wasmtime = { version = "=49.0.1", default-features = false, features = ["cranelift", "runtime", "std", "wat", "gc", "gc-drc", "parallel-compilation", "cache", "backtrace", "addr2line", "demangle"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
 [profile.release]
 strip = "symbols"
