@@ -248,4 +248,17 @@ final class ComponentImportTest extends TestCase
         $this->expectException(\FiberError::class);
         (new \Fiber(fn () => $exports->callNow()))->start();
     }
+
+    public function test_an_import_that_needs_a_resource_is_a_link_error(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (import "thing" (type $thing (sub resource)))
+              (import "use-thing" (func (param "t" (own $thing)))))
+            WAT);
+
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('not supported yet');
+        new Instance($component, ['thing' => fn () => null, 'use-thing' => fn () => null]);
+    }
 }
