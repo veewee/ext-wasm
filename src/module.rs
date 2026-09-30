@@ -26,9 +26,9 @@ impl Module {
     }
 
     /// @return list<array{name: string, kind: string}>
-    pub fn exports(module: &Module) -> PhpResult<ZBox<ZendHashTable>> {
+    pub fn exports(&self) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
-        for export in module.inner.exports() {
+        for export in self.inner.exports() {
             let mut entry = ZendHashTable::new();
             entry.insert("name", export.name())?;
             entry.insert("kind", kind(&export.ty()))?;
@@ -38,9 +38,9 @@ impl Module {
     }
 
     /// @return list<array{module: string, name: string, kind: string}>
-    pub fn imports(module: &Module) -> PhpResult<ZBox<ZendHashTable>> {
+    pub fn imports(&self) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
-        for import in module.inner.imports() {
+        for import in self.inner.imports() {
             let mut entry = ZendHashTable::new();
             entry.insert("module", import.module())?;
             entry.insert("name", import.name())?;
@@ -51,9 +51,9 @@ impl Module {
     }
 
     /// @return list<string>
-    pub fn custom_sections(module: &Module, name: String) -> PhpResult<ZBox<ZendHashTable>> {
+    pub fn custom_sections(&self, name: String) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
-        for (_, data) in module
+        for (_, data) in self
             .custom_sections
             .iter()
             .filter(|(section, _)| *section == name)

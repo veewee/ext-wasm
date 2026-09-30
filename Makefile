@@ -10,6 +10,7 @@ compile:																		## compiles a release version of this extension
 stubs:																			## Generates stubs
 	cargo build;
 	cargo php stubs -o ext-wasm.stubs.php;
+	php tools/strip-duplicate-tags.php ext-wasm.stubs.php;
 
 setup-ci:																		## Setup CI
 	make compile

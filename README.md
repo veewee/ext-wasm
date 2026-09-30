@@ -52,10 +52,12 @@ Wasm\compile($bytes);                             // Wasm\Module
 Wasm\instantiate($bytes, $imports);               // ['module' => Module, 'instance' => Instance]
 Wasm\instantiate($module, $imports);              // Instance
 
-Wasm\Module::exports($module);                    // [['name' => 'add', 'kind' => 'function'], ...]
-Wasm\Module::imports($module);                    // [['module' => 'env', 'name' => 'log', 'kind' => 'function'], ...]
-Wasm\Module::customSections($module, 'name');     // list of binary strings
+$module->exports();                               // [['name' => 'add', 'kind' => 'function'], ...]
+$module->imports();                               // [['module' => 'env', 'name' => 'log', 'kind' => 'function'], ...]
+$module->customSections('name');                  // list of binary strings
 ```
+
+JS has these three as static functions on `WebAssembly.Module`. Here they are methods of the module.
 
 ### Exports
 

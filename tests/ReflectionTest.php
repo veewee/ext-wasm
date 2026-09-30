@@ -26,7 +26,7 @@ final class ReflectionTest extends TestCase
             ['name' => 'g', 'kind' => 'global'],
             ['name' => 't', 'kind' => 'table'],
             ['name' => 'e', 'kind' => 'tag'],
-        ], Module::exports($module));
+        ], $module->exports());
     }
 
     public function test_it_lists_imports(): void
@@ -40,15 +40,15 @@ final class ReflectionTest extends TestCase
         self::assertSame([
             ['module' => 'env', 'name' => 'log', 'kind' => 'function'],
             ['module' => 'js', 'name' => 'mem', 'kind' => 'memory'],
-        ], Module::imports($module));
+        ], $module->imports());
     }
 
     public function test_it_reads_custom_sections(): void
     {
         $module = new Module(self::withCustomSections([['meta', 'first'], ['other', 'x'], ['meta', "sec\0ond"]]));
 
-        self::assertSame(['first', "sec\0ond"], Module::customSections($module, 'meta'));
-        self::assertSame([], Module::customSections($module, 'missing'));
+        self::assertSame(['first', "sec\0ond"], $module->customSections('meta'));
+        self::assertSame([], $module->customSections('missing'));
     }
 
     /** @param list<array{string, string}> $sections */

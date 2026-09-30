@@ -86,7 +86,6 @@ namespace Wasm {
         /**
          * @param array{value: string, mutable?: bool} $descriptor
          *
-         * @param array $descriptor
          * @param mixed $value
          * @param \Wasm\Store|null $store
          */
@@ -137,7 +136,6 @@ namespace Wasm {
         /**
          * @param array{initial: int, maximum?: int} $descriptor
          *
-         * @param array $descriptor
          * @param \Wasm\Store|null $store
          */
         public function __construct(array $descriptor, ?\Wasm\Store $store = null) {}
@@ -188,27 +186,19 @@ namespace Wasm {
         /**
          * @return list<string>
          *
-         * @param \Wasm\Module $module
          * @param string $name
-         * @return array
          */
-        public static function customSections(\Wasm\Module $module, string $name): array {}
+        public function customSections(string $name): array {}
 
         /**
          * @return list<array{name: string, kind: string}>
-         *
-         * @param \Wasm\Module $module
-         * @return array
          */
-        public static function exports(\Wasm\Module $module): array {}
+        public function exports(): array {}
 
         /**
          * @return list<array{module: string, name: string, kind: string}>
-         *
-         * @param \Wasm\Module $module
-         * @return array
          */
-        public static function imports(\Wasm\Module $module): array {}
+        public function imports(): array {}
     }
 
     /**
@@ -231,7 +221,6 @@ namespace Wasm {
         /**
          * @param array{element: 'anyfunc'|'externref', initial: int, maximum?: int} $descriptor
          *
-         * @param array $descriptor
          * @param mixed $value
          * @param \Wasm\Store|null $store
          */
@@ -272,7 +261,6 @@ namespace Wasm {
         /**
          * @param array{parameters: list<string>} $descriptor
          *
-         * @param array $descriptor
          * @param \Wasm\Store|null $store
          */
         public function __construct(array $descriptor, ?\Wasm\Store $store = null) {}
@@ -292,7 +280,6 @@ namespace Wasm {
      *
      * @param mixed $source
      * @param array|null $imports
-     * @return mixed
      */
     function instantiate(mixed $source, ?array $imports = null): mixed {}
 

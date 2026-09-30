@@ -28,7 +28,7 @@ $module = new Wasm\Module(file_get_contents($wasm));
 // Instantiating requires a value for every declared import, but formatting
 // never calls them, so each one is a stub that fails loudly if it ever is.
 $imports = [];
-foreach (Wasm\Module::imports($module) as $import) {
+foreach ($module->imports() as $import) {
     $imports[$import['module']][$import['name']] = static function () use ($import): never {
         throw new RuntimeException("mago called its import {$import['name']}, which it only does when the input cannot be formatted");
     };
