@@ -115,6 +115,11 @@ impl Exports {
             .map(|func| func.inner)
     }
 
+    /// The export `name`, by its WIT name with or without version.
+    pub fn entry(&self, name: &str) -> Option<&Zval> {
+        self.find(name).ok()
+    }
+
     fn find(&self, name: &str) -> PhpResult<&Zval> {
         self.entries
             .iter()

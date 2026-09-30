@@ -6,14 +6,28 @@ use ext_php_rs::zend::ClassEntry;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{ResourceAny, ResourceDynamic, ResourceType};
 
+use std::rc::Rc;
+
+use crate::component::resource::{Resource, ResourceClass};
 use crate::store::HostState;
-use crate::value::{ConvertError, debug_type};
+use crate::value::{ConvertError, debug_type, downcast};
+
+/// What implements a resource a component imports.
+#[derive(Clone)]
+pub enum HostImpl {
+    /// A PHP class, whose objects the component gets handles to.
+    Class(String),
+    /// The resource another component instance exports, by the key of its
+    /// `Wasm\Component\ResourceClass` in the store's values. The handles
+    /// are that instance's `Wasm\Component\Resource` objects.
+    Component(usize),
+}
 
 /// The PHP classes and objects behind the host resources of one store.
 #[derive(Default)]
 pub struct HostResources {
-    /// The PHP class of each imported resource type, by its number.
-    classes: Vec<String>,
+    /// The implementation of each imported resource type, by its number.
+    classes: Vec<HostImpl>,
     objects: Vec<Option<Zval>>,
     vacant: Vec<u32>,
     /// PHP objects handed to the component while a call's values are
@@ -27,16 +41,16 @@ pub struct HostResources {
 impl HostResources {
     /// Registers the PHP class of an imported resource type and returns the
     /// type wasmtime tells it apart by.
-    pub fn register(&mut self, class: String) -> ResourceType {
-        self.classes.push(class);
+    pub fn register(&mut self, implementation: HostImpl) -> ResourceType {
+        self.classes.push(implementation);
         ResourceType::host_dynamic((self.classes.len() - 1) as u32)
     }
 
-    /// The number and PHP class of `ty`, if PHP implements it.
-    pub fn class_of(&self, ty: &ResourceType) -> Option<(u32, &str)> {
+    /// The number and implementation of `ty`, if PHP implements it.
+    pub fn impl_of(&self, ty: &ResourceType) -> Option<(u32, HostImpl)> {
         (0..self.classes.len() as u32)
             .find(|n| ResourceType::host_dynamic(*n) == *ty)
-            .map(|n| (n, self.classes[n as usize].as_str()))
+            .map(|n| (n, self.classes[n as usize].clone()))
     }
 
     fn insert(&mut self, object: Zval) -> u32 {
@@ -80,19 +94,49 @@ pub fn lower(
     ty: &ResourceType,
     owned: bool,
 ) -> Result<Option<ResourceAny>, ConvertError> {
-    let Some((n, class)) = ctx.data().host_resources.class_of(ty) else {
+    let Some((n, implementation)) = ctx.data().host_resources.impl_of(ty) else {
         return Ok(None);
     };
-    let is_instance = ClassEntry::try_find(class).is_some_and(|class| {
-        value
-            .object()
-            .is_some_and(|object| object.instance_of(class))
-    });
-    if !is_instance {
-        return Err(ConvertError::Type(format!(
-            "expected {class}, got {}",
-            debug_type(value)
-        )));
+    match implementation {
+        HostImpl::Class(class) => {
+            let is_instance = ClassEntry::try_find(&class).is_some_and(|class| {
+                value
+                    .object()
+                    .is_some_and(|object| object.instance_of(class))
+            });
+            if !is_instance {
+                return Err(ConvertError::Type(format!(
+                    "expected {class}, got {}",
+                    debug_type(value)
+                )));
+            }
+        }
+        HostImpl::Component(key) => {
+            let class = downcast::<ResourceClass>(ctx.data().values.get(key))
+                .map(|class| (class.store.clone(), class.meta.clone()));
+            let Some((store, meta)) = class else {
+                return Err(ConvertError::Runtime("the resource class is gone".into()));
+            };
+            let Some(resource) =
+                downcast::<Resource>(value).filter(|resource| Rc::ptr_eq(resource.store(), &store))
+            else {
+                return Err(ConvertError::Type(format!(
+                    "expected a {} resource of the instance exporting it, got {}",
+                    meta.name,
+                    debug_type(value)
+                )));
+            };
+            // A moved or dropped handle would sit in the table as a dead object.
+            let handle = resource
+                .handle()
+                .map_err(|err| ConvertError::Type(err.into()))?;
+            if handle.ty() != meta.ty {
+                return Err(ConvertError::Type(format!(
+                    "expected a {} resource, got another resource of that instance",
+                    meta.name
+                )));
+            }
+        }
     }
     let rep = ctx.data_mut().host_resources.insert(value.shallow_clone());
     let handle = ResourceDynamic::new_own(rep, n)
@@ -136,7 +180,7 @@ pub fn lift(
     ctx: &mut StoreContextMut<'_, HostState>,
     handle: &ResourceAny,
 ) -> Result<Option<Zval>, ConvertError> {
-    if ctx.data().host_resources.class_of(&handle.ty()).is_none() {
+    if ctx.data().host_resources.impl_of(&handle.ty()).is_none() {
         return Ok(None);
     }
     let owned = handle.owned();

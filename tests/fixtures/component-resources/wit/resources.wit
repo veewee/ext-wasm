@@ -34,3 +34,13 @@ world logging {
     export borrow-logger: func(l: borrow<logger>, line: string) -> string;
     export take-logger: func(l: logger, n: u32) -> u32;
 }
+
+/// A component that uses the `counter` resource another component exports.
+world composing {
+    import counters;
+    use counters.{counter};
+    export make-and-count: func(start: u32) -> u32;
+    export pass-through: func(c: counter) -> counter;
+    export peek: func(c: borrow<counter>) -> u32;
+    export total-of: func(a: borrow<counter>, b: borrow<counter>) -> u32;
+}
