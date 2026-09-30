@@ -15,7 +15,7 @@ final class Markdown
 
     public function __construct(string $wasmFile = __DIR__ . '/markdown.wasm')
     {
-        $this->wasm = (new Wasm\Instance(new Wasm\Module(file_get_contents($wasmFile))))->exports;
+        $this->wasm = (new Wasm\Instance(Wasm\Module::fromFile($wasmFile)))->exports;
     }
 
     public function toHtml(string $markdown): string

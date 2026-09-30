@@ -22,7 +22,7 @@ if (!is_file($wasm)) {
     exit(1);
 }
 
-$module = new Wasm\Module(file_get_contents($wasm));
+$module = Wasm\Module::fromFile($wasm);
 
 // The module declares imports that its generated JS glue normally provides.
 // Instantiating requires a value for every declared import, but formatting

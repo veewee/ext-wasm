@@ -37,7 +37,7 @@ final class Game
             return $instance->exports->memory;
         };
 
-        $instance = new Instance(new Module(file_get_contents($wasmFile)), [
+        $instance = new Instance(Module::fromFile($wasmFile), [
             'console' => [
                 'onInfoMessage' => fn (int $ptr, int $len) => $this->messages[] = $memory()->read($ptr, $len),
                 'onErrorMessage' => fn (int $ptr, int $len) => $this->messages[] = 'error: ' . $memory()->read($ptr, $len),

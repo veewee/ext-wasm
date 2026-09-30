@@ -1,3 +1,6 @@
+use std::ffi::{CStr, CString};
+
+use ext_php_rs::alloc::efree;
 use ext_php_rs::binary_slice::BinarySlice;
 use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
@@ -6,7 +9,7 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::ZendHashTable;
 
 use crate::engine::{compile_in_process_pool, engine};
-use crate::error::compile_error;
+use crate::error::{compile_error, wasm_exception};
 use crate::imports::kind;
 
 #[php_class]
@@ -23,6 +26,14 @@ impl Module {
     /// Compiles a wasm binary or WAT text.
     pub fn __construct(bytes: BinarySlice<u8>) -> PhpResult<Self> {
         Self::compile(&bytes)
+    }
+
+    /// Compiles a wasm binary or WAT file, like `new Module(file_get_contents($path))`.
+    ///
+    /// Reads local files only and honours open_basedir. Use file_get_contents()
+    /// for stream wrappers such as phar:// or compress.zlib://.
+    pub fn from_file(path: String) -> PhpResult<Self> {
+        Self::compile(&read_local_file(&path)?)
     }
 
     /// @return list<array{name: string, kind: string}>
@@ -75,6 +86,41 @@ impl Module {
             custom_sections: custom_sections(&binary),
         })
     }
+}
+
+unsafe extern "C" {
+    fn expand_filepath(
+        filepath: *const std::ffi::c_char,
+        real_path: *mut std::ffi::c_char,
+    ) -> *mut std::ffi::c_char;
+    fn php_check_open_basedir_ex(
+        path: *const std::ffi::c_char,
+        warn: std::ffi::c_int,
+    ) -> std::ffi::c_int;
+}
+
+/// Reads a file the way PHP's own file functions find it: relative to PHP's
+/// working directory, which differs from the process one in ZTS builds, and
+/// only inside open_basedir.
+fn read_local_file(path: &str) -> PhpResult<Vec<u8>> {
+    let fail = |reason: &str| wasm_exception(format!("cannot read {path}: {reason}"));
+    let c_path = CString::new(path).map_err(|_| fail("the path contains a NUL byte"))?;
+    // SAFETY: `c_path` is a valid C string; PHP returns an emalloc'd copy or null.
+    let expanded = unsafe { expand_filepath(c_path.as_ptr(), std::ptr::null_mut()) };
+    if expanded.is_null() {
+        return Err(fail("the path cannot be resolved"));
+    }
+    // SAFETY: `expanded` is a C string PHP allocated for us, freed right after the copy.
+    let absolute = unsafe { CStr::from_ptr(expanded) }.to_owned();
+    unsafe { efree(expanded.cast()) };
+    // SAFETY: `absolute` is a valid C string; 0 suppresses PHP's own warning.
+    if unsafe { php_check_open_basedir_ex(absolute.as_ptr(), 0) } != 0 {
+        return Err(fail("the path is outside open_basedir"));
+    }
+    let absolute = absolute
+        .to_str()
+        .map_err(|_| fail("the path is not valid UTF-8"))?;
+    std::fs::read(absolute).map_err(|err| fail(&err.to_string()))
 }
 
 pub fn validate(bytes: &[u8]) -> bool {

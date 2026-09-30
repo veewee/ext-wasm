@@ -196,6 +196,17 @@ namespace Wasm {
         public function exports(): array {}
 
         /**
+         * Compiles a wasm binary or WAT file, like `new Module(file_get_contents($path))`.
+         *
+         * Reads local files only and honours open_basedir. Use file_get_contents()
+         * for stream wrappers such as phar:// or compress.zlib://.
+         *
+         * @param string $path
+         * @return \Wasm\Module
+         */
+        public static function fromFile(string $path): \Wasm\Module {}
+
+        /**
          * @return list<array{module: string, name: string, kind: string}>
          */
         public function imports(): array {}

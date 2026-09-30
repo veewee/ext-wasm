@@ -98,6 +98,10 @@ pub fn adopt_exception_behaviour() {
     });
 }
 
+pub fn wasm_exception(message: impl Into<String>) -> PhpException {
+    PhpException::from_class::<WasmException>(message.into())
+}
+
 pub fn compile_error(err: impl Display) -> PhpException {
     PhpException::from_class::<CompileError>(format!("{err:#}"))
 }

@@ -22,7 +22,7 @@ function checkout(Wasm\Module $quickjs, array $order): array
     return json_decode($wasi->stdout(), true, flags: JSON_THROW_ON_ERROR);
 }
 
-$quickjs = new Wasm\Module(file_get_contents(__DIR__ . '/dist/qjs.wasm'));
+$quickjs = Wasm\Module::fromFile(__DIR__ . '/dist/qjs.wasm');
 
 $orders = [
     'valid order' => [

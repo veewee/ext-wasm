@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 $code = $argv[1] ?? 'print("Hello from Python in PHP")';
-$module = new Wasm\Module(file_get_contents(__DIR__ . '/dist/python.wasm'));
+$module = Wasm\Module::fromFile(__DIR__ . '/dist/python.wasm');
 $stdin = stream_isatty(STDIN) ? '' : stream_get_contents(STDIN);
 
 $wasi = new Wasm\Wasi(args: ['python', '-c', $code], stdin: $stdin);
