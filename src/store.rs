@@ -21,6 +21,8 @@ pub struct HostState {
     handle: Weak<StoreHandle>,
     /// The WASI context of a store created by `Wasm\Wasi`.
     pub wasi: Option<wasmtime_wasi::p1::WasiP1Ctx>,
+    /// The preview2 WASI context of a component instance given a `Wasm\Wasi`.
+    pub wasi_p2: Option<WasiP2>,
     /// Set once an instance with a `Wasm\Suspending` import joins this store.
     /// From then on every PHP callback is async and every call goes through
     /// `suspend::drive`, because wasmtime rejects sync calls in the store.
@@ -32,11 +34,30 @@ pub struct HostState {
 // SAFETY: wasmtime-wasi and wasmtime's async functions require Send store
 // data. A store is created, used and dropped on one PHP thread and never
 // handed to another, so the Rc and raw pointers inside are never touched from
-// two threads. The sync p1 functions with in-memory stdio and
-// `allow_blocking_current_thread` run every host call on the calling thread,
-// and `suspend::drive` polls every async call on that thread with a no-op
-// waker. Async WASI or streaming stdio would need this revisited.
+// two threads. The sync WASI functions run every host call on the calling
+// thread, and `suspend::drive` polls every async call on that thread with a
+// no-op waker. Preview2 file streams do hand reads and writes to tokio's
+// blocking pool, but those tasks own their buffers and file handles, never
+// the store data. Async WASI would need this revisited.
 unsafe impl Send for HostState {}
+
+pub struct WasiP2 {
+    pub ctx: wasmtime_wasi::WasiCtx,
+    pub table: wasmtime::component::ResourceTable,
+}
+
+impl wasmtime_wasi::WasiView for HostState {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        let p2 = self
+            .wasi_p2
+            .as_mut()
+            .expect("preview2 WASI functions only exist in stores given a Wasm\\Wasi");
+        wasmtime_wasi::WasiCtxView {
+            ctx: &mut p2.ctx,
+            table: &mut p2.table,
+        }
+    }
+}
 
 /// A tag's PHP object, held without a reference.
 ///
@@ -334,6 +355,9 @@ impl StoreHandle {
 
         let result = {
             let mut store = self.store.borrow_mut();
+            let wasi = store.data().wasi.is_some() || store.data().wasi_p2.is_some();
+            let runtime = wasi.then(crate::engine::wasi_runtime);
+            let _entered = runtime.as_ref().map(tokio::runtime::Handle::enter);
             let mut scope = RootScope::new(&mut *store);
             f(scope.as_context_mut())
         };

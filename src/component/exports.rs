@@ -67,6 +67,17 @@ impl Exports {
         })
     }
 
+    pub fn interface(&self, name: &str) -> Option<&Exports> {
+        self.find(name).ok().and_then(downcast::<Exports>)
+    }
+
+    pub fn func(&self, name: &str) -> Option<wasmtime::component::Func> {
+        self.find(name)
+            .ok()
+            .and_then(downcast::<Func>)
+            .map(|func| func.inner)
+    }
+
     fn find(&self, name: &str) -> PhpResult<&Zval> {
         self.entries
             .iter()

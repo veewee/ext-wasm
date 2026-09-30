@@ -13,3 +13,4 @@ tools/*.phar binary
 /examples/typst/dist/
 /examples/async/vendor/
 /examples/async/composer.lock
+/tests/fixtures/component-wasi/target/

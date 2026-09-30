@@ -293,11 +293,13 @@ namespace Wasm {
     }
 
     /**
-     * A WASI preview1 environment for one run of one module, like Node's `WASI`.
+     * A WASI environment for one run of one module or component, like Node's `WASI`.
      *
-     * Nothing of the host is visible to the module except what is passed here:
+     * Nothing of the host is visible to the program except what is passed here:
      * no environment, no stdio and no files outside the preopened directories.
-     * stdout and stderr are captured and read after the run.
+     * stdout and stderr are captured and read after the run. A core module gets
+     * WASI preview1 through `getImportObject()`, a component gets preview2 when
+     * the Wasi object is passed to `Wasm\Component\Instance`.
      */
     class Wasi {
         /**
@@ -311,6 +313,8 @@ namespace Wasm {
         public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null) {}
 
         /**
+         * The preview1 functions for a core module.
+         *
          * @return array{wasi_snapshot_preview1: array<string, \Wasm\Func>}
          */
         public function getImportObject(): array {}
@@ -324,12 +328,14 @@ namespace Wasm {
         public function initialize(\Wasm\Instance $instance): void {}
 
         /**
-         * Runs `_start` and returns the exit code.
+         * Runs `_start` of a module, or `wasi:cli/run` of a component, and
+         * returns the exit code.
          *
-         * @param \Wasm\Instance $instance
+         * @param \Wasm\Instance|\Wasm\Component\Instance $instance
+         *
          * @return int
          */
-        public function start(\Wasm\Instance $instance): int {}
+        public function start(mixed $instance): int {}
 
         /**
          * @return string
@@ -473,10 +479,11 @@ namespace Wasm\Component {
 
         /**
          * @param array<string, callable|array<string, callable>>|null $imports
+         * @param \Wasm\Wasi|null $wasi provides every `wasi:*` import, as WASI preview2
          *
          * @param \Wasm\Component\Component $component
          */
-        public function __construct(\Wasm\Component\Component $component, ?array $imports = null) {}
+        public function __construct(\Wasm\Component\Component $component, ?array $imports = null, ?\Wasm\Wasi $wasi = null) {}
     }
 
     /**

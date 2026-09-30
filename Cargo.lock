@@ -2322,6 +2322,7 @@ version = "0.1.0"
 dependencies = [
  "ext-php-rs",
  "rayon",
+ "tokio",
  "wasmparser 0.258.0",
  "wasmtime",
  "wasmtime-wasi",
