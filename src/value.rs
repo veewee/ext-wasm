@@ -6,7 +6,7 @@ use ext_php_rs::types::ZendClassObject;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::{ExternRef, HeapTopType, HeapType, Ref, RefType, StoreContextMut, Val, ValType};
 
-use crate::error::{link_error, type_error, value_error};
+use crate::error::{link_error, runtime_error, type_error, value_error};
 use crate::func::Func;
 use crate::store::{self, HostState, ValueKey};
 
@@ -18,14 +18,16 @@ pub enum ConvertError {
     Value(String),
     /// A wasm object from another store.
     Link(String),
+    Runtime(String),
 }
 
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Type(message) | Self::Value(message) | Self::Link(message) => {
-                f.write_str(message)
-            }
+            Self::Type(message)
+            | Self::Value(message)
+            | Self::Link(message)
+            | Self::Runtime(message) => f.write_str(message),
         }
     }
 }
@@ -38,6 +40,7 @@ impl From<ConvertError> for PhpException {
             ConvertError::Type(message) => type_error(message),
             ConvertError::Value(message) => value_error(message),
             ConvertError::Link(message) => link_error(message),
+            ConvertError::Runtime(message) => runtime_error(wasmtime::Error::msg(message)),
         }
     }
 }
@@ -93,6 +96,10 @@ pub fn to_ref(
     }
     match ty.heap_type() {
         HeapType::Extern => {
+            // Allocating can run the GC, which cannot see a parked call's frames.
+            if store::of(&*ctx).is_parked() {
+                return Err(ConvertError::Runtime(store::BUSY.into()));
+            }
             let key = ctx.data_mut().values.insert_ref(value.shallow_clone());
             let externref = ExternRef::new(&mut *ctx, key)
                 .map_err(|err| ConvertError::Value(format!("{err:#}")))?;

@@ -19,7 +19,7 @@ use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
 
 use crate::engine::engine;
 use crate::error::{error, runtime_error, type_error, value_error};
-use crate::func::Func;
+use crate::func::{self, Func};
 use crate::instance::Instance;
 use crate::store::{self, HostState, SharedStore};
 use crate::throw::call_error;
@@ -138,15 +138,15 @@ impl Wasi {
             .entry(instance, "_start")?
             .ok_or_else(|| type_error("the instance has no _start export"))?;
         self.used.set(true);
-        let code = self
-            .store
-            .with(|mut ctx| match func.call(&mut ctx, &[], &mut []) {
+        let code = self.store.with(|mut ctx| {
+            match func::run(&self.store, &mut ctx, &func, &[], &mut []) {
                 Ok(()) => Ok(0),
                 Err(err) => match err.downcast_ref::<I32Exit>() {
                     Some(exit) => Ok(i64::from(exit.0)),
                     None => Err(call_error(&mut ctx, err)),
                 },
-            })?;
+            }
+        })?;
         self.check_output()?;
         Ok(code)
     }
@@ -161,7 +161,7 @@ impl Wasi {
             return Ok(());
         };
         self.store.with(|mut ctx| {
-            func.call(&mut ctx, &[], &mut [])
+            func::run(&self.store, &mut ctx, &func, &[], &mut [])
                 .map_err(|err| call_error(&mut ctx, err))
         })?;
         self.check_output()
@@ -179,6 +179,9 @@ impl Wasi {
 impl Wasi {
     /// The entry point `name` of an instance in this Wasi's store.
     fn entry(&self, instance: &Instance, name: &str) -> PhpResult<Option<wasmtime::Func>> {
+        if self.store.is_parked() {
+            return Err(store::busy());
+        }
         let exports = instance.exports_object();
         if !Rc::ptr_eq(exports.store(), &self.store) {
             return Err(store::mismatch("Instance"));
