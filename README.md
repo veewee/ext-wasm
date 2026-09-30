@@ -209,6 +209,20 @@ $wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.exampl
 
 An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Connecting, waiting for the response headers and every wait between body chunks are each limited to PHP's `default_socket_timeout`, read when the component is instantiated, and the whole setup until the headers, TLS handshake included, to twice that. With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies and the TLS handshake has none. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
 
+A component that exports `wasi:http/incoming-handler`, such as one built for `wasi:http/proxy`, can answer HTTP requests from PHP:
+
+```php
+use Wasm\Component\Http\Request;
+
+$instance = new Instance($component, wasi: new Wasm\Wasi(httpHosts: []));
+$response = $instance->handle(new Request('POST', 'https://example.com/api?x=1', ['content-type' => 'application/json'], $json));
+$response->status;    // 200
+$response->headers;   // ['content-type' => ['application/json']], names lowercase, values as lists
+$response->body;      // the whole body as a string
+```
+
+`Request` and `Response` are small read-only value objects of the extension, so no PSR-7 package is needed; converting from and to one takes a few lines in userland. The proxy world imports the HTTP types, so the `Wasi` object needs `httpHosts`, and an empty list is enough when the component makes no requests itself. Headers that HTTP handles by itself, such as `host`, `connection` and `transfer-encoding`, are left out of the request the component sees; the host is part of its URL. An error code the component answers with, a component that never sets a response, and a trap are each a `RuntimeError`.
+
 Resources, the WIT types with handles and methods, work in both directions. A resource a component exports is a `Wasm\Component\ResourceClass` in its interface, and its handles are `Wasm\Component\Resource` objects:
 
 ```php

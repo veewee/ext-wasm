@@ -507,6 +507,15 @@ namespace Wasm\Component {
          * @param \Wasm\Component\Component $component
          */
         public function __construct(\Wasm\Component\Component $component, ?array $imports = null, ?\Wasm\Wasi $wasi = null) {}
+
+        /**
+         * Hands `request` to the component's `wasi:http/incoming-handler` and
+         * returns its response.
+         *
+         * @param \Wasm\Component\Http\Request $request
+         * @return \Wasm\Component\Http\Response
+         */
+        public function handle(\Wasm\Component\Http\Request $request): \Wasm\Component\Http\Response {}
     }
 
     /**
@@ -644,6 +653,61 @@ namespace Wasm\Component {
          * @param mixed $value
          */
         public function __construct(string $tag, mixed $value = null) {}
+    }
+}
+
+namespace Wasm\Component\Http {
+    /**
+     * An HTTP request for a component, like `new Request('GET', 'https://example.com/')`.
+     *
+     * Header names are lowercase and every name maps to a list of values.
+     */
+    class Request {
+        public readonly string $body;
+
+        /**
+         * @return array<string, list<string>>
+         *
+         * @var mixed
+         */
+        public readonly mixed $headers = null;
+
+        public readonly string $method;
+
+        public readonly string $url;
+
+        /**
+         * @param array<string, string|list<string>>|null $headers
+         *
+         * @param string $method
+         * @param string $url
+         * @param string|null $body
+         */
+        public function __construct(string $method, string $url, ?array $headers = null, ?string $body = null) {}
+    }
+
+    /**
+     * The HTTP response of a component.
+     */
+    class Response {
+        public readonly string $body;
+
+        /**
+         * @return array<string, list<string>>
+         *
+         * @var mixed
+         */
+        public readonly mixed $headers = null;
+
+        public readonly int $status;
+
+        /**
+         * @param array<string, string|list<string>>|null $headers
+         *
+         * @param int $status
+         * @param string|null $body
+         */
+        public function __construct(int $status, ?array $headers = null, ?string $body = null) {}
     }
 }
 

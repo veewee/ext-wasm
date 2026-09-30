@@ -7,9 +7,10 @@ use wasmtime::component::Linker;
 
 use crate::component::Component;
 use crate::component::exports::Exports;
+use crate::component::http_handler::{self, Request, Response};
 use crate::component::imports;
 use crate::engine::engine;
-use crate::error::link_error;
+use crate::error::{error, link_error};
 use crate::store::{self, HostState, SharedStore};
 use crate::throw::call_error;
 use crate::value::downcast;
@@ -66,6 +67,15 @@ impl Instance {
     #[php(getter)]
     pub fn get_exports(&self) -> Zval {
         self.exports.shallow_clone()
+    }
+
+    /// Hands `request` to the component's `wasi:http/incoming-handler` and
+    /// returns its response.
+    pub fn handle(&self, request: &Request) -> PhpResult<Response> {
+        let handler = self
+            .func("wasi:http/incoming-handler", "handle")
+            .ok_or_else(|| error("the component does not export wasi:http/incoming-handler"))?;
+        http_handler::handle(&self.store, handler, request)
     }
 }
 

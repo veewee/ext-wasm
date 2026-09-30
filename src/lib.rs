@@ -99,6 +99,8 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<component::resource::Resource>()
         .class::<component::types::ValueType>()
         .class::<component::types::FunctionType>()
+        .class::<component::http_handler::Request>()
+        .class::<component::http_handler::Response>()
         .class::<component::value::Variant>()
         .class::<component::value::ResultValue>()
         .class::<store::StoreObject>()

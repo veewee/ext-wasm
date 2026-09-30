@@ -16,3 +16,4 @@ tools/*.phar binary
 /tests/fixtures/component-wasi/target/
 /tests/fixtures/component-http/target/
 /tests/fixtures/component-resources/*/target/
+/tests/fixtures/component-http-handler/target/

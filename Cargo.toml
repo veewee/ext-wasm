@@ -21,10 +21,11 @@ wasmtime = { version = "=49.0.1", default-features = false, features = ["craneli
 wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p1"] }
 wasmtime-wasi-http = { version = "=49.0.1", default-features = false, features = ["default-send-request", "p2"] }
 # Already dependencies of wasmtime-wasi-http; used directly for the host allowlist, see src/component/http.rs.
+bytes = "=1.12.1"
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 # Already a dependency of wasmtime-wasi; used directly for a runtime per process, see engine.rs.
-tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "time", "net"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "time", "net", "sync"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }

@@ -5,6 +5,7 @@ pub mod exports;
 pub mod func;
 pub mod host_resource;
 pub mod http;
+pub mod http_handler;
 pub mod imports;
 pub mod instance;
 pub mod resource;
