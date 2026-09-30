@@ -12,10 +12,10 @@ use ext_php_rs::convert::IntoZval;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::ZendHashTable;
+use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::Linker;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
-use wasmtime_wasi::{I32Exit, WasiCtxBuilder, p1};
+use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
 
 use crate::engine::engine;
 use crate::error::{error, runtime_error, type_error, value_error};
@@ -77,7 +77,35 @@ impl Wasi {
                 .ok_or_else(|| type_error(format!("env value of \"{key}\" must be a string")))?;
             builder.env(key.to_string(), value);
         }
-        let _ = preopens;
+        for (guest, spec) in preopens.map(ZendHashTable::iter).into_iter().flatten() {
+            let (host, writable) = match spec.array() {
+                Some(options) => (
+                    options.get("path").and_then(Zval::str).ok_or_else(|| {
+                        type_error(format!("preopen \"{guest}\" needs a \"path\""))
+                    })?,
+                    options
+                        .get("writable")
+                        .and_then(Zval::bool)
+                        .unwrap_or(false),
+                ),
+                None => (
+                    spec.str().ok_or_else(|| {
+                        type_error(format!(
+                            "preopen \"{guest}\" must be a host path or an array with \"path\""
+                        ))
+                    })?,
+                    false,
+                ),
+            };
+            let perms = if writable {
+                FsPerms::ReadWrite
+            } else {
+                FsPerms::ReadOnly
+            };
+            builder
+                .preopened_dir(host, guest.to_string(), perms)
+                .map_err(|err| value_error(format!("cannot preopen {host}: {err:#}")))?;
+        }
         builder.stdin(MemoryInputPipe::new(
             stdin.map(|bytes| bytes.to_vec()).unwrap_or_default(),
         ));

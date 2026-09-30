@@ -12,6 +12,26 @@ use Wasm\Wasi;
 
 final class WasiTest extends TestCase
 {
+    /** Opens hello.txt in the first preopen and copies it to stdout; exits with the errno on failure. */
+    public const OPEN_AND_READ = <<<'EOWAT'
+        (data (i32.const 512) "hello.txt")
+        (func (export "_start") (local $err i32)
+          (local.set $err (call $path_open (i32.const 3) (i32.const 0) (i32.const 512) (i32.const 9)
+            (i32.const 0) (i64.const 2) (i64.const 0) (i32.const 0) (i32.const 12)))
+          (if (local.get $err) (then (call $proc_exit (local.get $err))))
+          (call $write (i32.const 1) (i32.const 1024) (call $read (i32.load (i32.const 12)) (i32.const 1024) (i32.const 1024))))
+        EOWAT;
+
+    private const CREATE_AND_WRITE = <<<'EOWAT'
+        (data (i32.const 512) "out.txt")
+        (data (i32.const 1024) "made")
+        (func (export "_start") (local $err i32)
+          (local.set $err (call $path_open (i32.const 3) (i32.const 0) (i32.const 512) (i32.const 7)
+            (i32.const 9) (i64.const 64) (i64.const 0) (i32.const 0) (i32.const 12)))
+          (if (local.get $err) (then (call $proc_exit (local.get $err))))
+          (call $write (i32.load (i32.const 12)) (i32.const 1024) (i32.const 4)))
+        EOWAT;
+
     public function test_it_captures_stdout_and_returns_exit_code_zero(): void
     {
         $wasi = new Wasi();
@@ -127,13 +147,55 @@ final class WasiTest extends TestCase
         self::assertSame(100, strlen($fd === 1 ? $wasi->stdout() : $wasi->stderr()));
     }
 
+    public function test_a_preopened_directory_can_be_read(): void
+    {
+        $dir = self::tempDir();
+        file_put_contents("$dir/hello.txt", 'from the host');
+        $wasi = new Wasi(preopens: ['/data' => $dir]);
+
+        self::assertSame(0, $wasi->start($this->instance($wasi, self::OPEN_AND_READ)));
+        self::assertSame('from the host', $wasi->stdout());
+    }
+
+    public function test_preopens_are_read_only_by_default(): void
+    {
+        $dir = self::tempDir();
+        $wasi = new Wasi(preopens: ['/data' => $dir]);
+
+        self::assertNotSame(0, $wasi->start($this->instance($wasi, self::CREATE_AND_WRITE)));
+        self::assertFileDoesNotExist("$dir/out.txt");
+    }
+
+    public function test_a_writable_preopen_can_be_written(): void
+    {
+        $dir = self::tempDir();
+        $wasi = new Wasi(preopens: ['/data' => ['path' => $dir, 'writable' => true]]);
+
+        self::assertSame(0, $wasi->start($this->instance($wasi, self::CREATE_AND_WRITE)));
+        self::assertSame('made', file_get_contents("$dir/out.txt"));
+    }
+
+    public function test_a_missing_preopen_directory_throws(): void
+    {
+        $this->expectException(\ValueError::class);
+        new Wasi(preopens: ['/data' => sys_get_temp_dir() . '/does-not-exist-' . uniqid()]);
+    }
+
+    public static function tempDir(): string
+    {
+        $dir = sys_get_temp_dir() . '/wasm-wasi-' . uniqid();
+        mkdir($dir);
+
+        return $dir;
+    }
+
     private function instance(Wasi $wasi, string $body): Instance
     {
         return new Instance(new Module(self::module($body)), $wasi->getImportObject());
     }
 
     /** A module with the WASI imports the tests use and $write/$read helpers. */
-    private static function module(string $body, string $imports = ''): string
+    public static function module(string $body, string $imports = ''): string
     {
         return <<<EOWAT
             (module
