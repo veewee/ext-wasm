@@ -15,7 +15,6 @@ final class Terminal
         // No line buffering, no echo, and Ctrl+C arrives as a byte, so the
         // game loop can restore the terminal before it exits.
         shell_exec('stty -icanon -echo -isig min 0 time 0 < /dev/tty');
-        stream_set_blocking(STDIN, false);
         // Alternate screen, hidden cursor, cleared.
         $this->write("\e[?1049h\e[?25l\e[2J");
     }
@@ -27,7 +26,6 @@ final class Terminal
         }
         $this->write("\e[0m\e[?25h\e[?1049l");
         shell_exec('stty ' . escapeshellarg($this->savedMode) . ' < /dev/tty');
-        stream_set_blocking(STDIN, true);
         $this->savedMode = null;
     }
 
@@ -39,14 +37,39 @@ final class Terminal
         return [max($columns, 20), max($rows, 10)];
     }
 
+    /**
+     * Returns the input that is waiting, without blocking.
+     *
+     * STDIN stays in blocking mode: it shares the terminal with STDOUT, and a
+     * non-blocking terminal made large frame writes stop after a few KB.
+     */
     public function read(): string
     {
-        return (string) fread(STDIN, 4096);
+        $input = '';
+        $read = [STDIN];
+        $none = null;
+        while (stream_select($read, $none, $none, 0) > 0) {
+            $chunk = (string) fread(STDIN, 4096);
+            if ($chunk === '') {
+                break;
+            }
+            $input .= $chunk;
+            $read = [STDIN];
+        }
+
+        return $input;
     }
 
     public function write(string $output): void
     {
-        fwrite(STDOUT, $output);
+        // A terminal can accept less than asked, so keep writing until all of it is out.
+        while ($output !== '') {
+            $written = fwrite(STDOUT, $output);
+            if ($written === false || $written === 0) {
+                return;
+            }
+            $output = substr($output, $written);
+        }
         fflush(STDOUT);
     }
 }
