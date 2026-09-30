@@ -1,7 +1,9 @@
 name: release
 
 # Builds the prebuilt binaries PIE downloads, named as PIE expects:
-# php_wasm-{version}_php{major.minor}-{arch}-{os}-{libc}[-zts].zip, holding wasm.so.
+# php_wasm-{version}_php{major.minor}-{arch}-{os}-{libc}[-zts].zip, holding wasm.so,
+# and on Windows php_wasm-{version}-{major.minor}-{ts|nts}-{compiler}-{arch}.zip,
+# holding a DLL of the same name.
 # Tag releases with a plain version (0.2.0), since the tag becomes {version}.
 # The release starts as a draft, and PIE only sees it once it is published.
 
@@ -36,8 +38,11 @@ jobs:
           - { runner: ubuntu-22.04, os: linux, arch: x86_64, libc: glibc, library: libwasm.so }
           - { runner: ubuntu-22.04-arm, os: linux, arch: arm64, libc: glibc, library: libwasm.so }
           - { runner: macos-latest, os: darwin, arch: arm64, libc: bsdlibc, library: libwasm.dylib }
+          - { runner: windows-latest, os: windows, arch: x86_64, library: wasm.dll }
         exclude:
           - { ts: zts, target: { os: darwin } }
+          # CI only tests thread-safe PHP on Linux, so no untested Windows ZTS build ships.
+          - { ts: zts, target: { os: windows } }
 
     defaults:
       run:
@@ -62,6 +67,7 @@ jobs:
         run: php -d "extension=$PWD/target/release/${{ matrix.target.library }}" tools/phpunit.phar
 
       - name: Package and upload
+        if: matrix.target.os != 'windows'
         run: |
           suffix=""
           [ "${{ matrix.ts }}" = "zts" ] && suffix="-zts"
@@ -70,5 +76,20 @@ jobs:
           cp "target/release/${{ matrix.target.library }}" package/wasm.so
           (cd package && zip "../$asset" wasm.so)
           gh release upload "$GITHUB_REF_NAME" "$asset"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # PIE matches the compiler PHP was built with, which php -i reports as
+      # "PHP Extension Build => API20230831,NTS,VS16".
+      - name: Package and upload for Windows
+        if: matrix.target.os == 'windows'
+        run: |
+          compiler=$(php -i | tr -d '\r' | sed -n 's/^PHP Extension Build => //p' | tr ',' '\n' | grep -E '^V[CS][0-9]+$' | tr '[:upper:]' '[:lower:]')
+          [ -n "$compiler" ] || { echo "::error::no compiler in php -i"; exit 1; }
+          name="php_wasm-${GITHUB_REF_NAME}-${{ matrix.php }}-${{ matrix.ts }}-${compiler}-${{ matrix.target.arch }}"
+          mkdir -p package
+          cp "target/release/${{ matrix.target.library }}" "package/$name.dll"
+          (cd package && 7z a "../$name.zip" "$name.dll")
+          gh release upload "$GITHUB_REF_NAME" "$name.zip"
         env:
           GH_TOKEN: ${{ github.token }}

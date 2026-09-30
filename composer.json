@@ -18,7 +18,6 @@
         "extension-name": "wasm",
         "support-zts": true,
         "support-nts": true,
-        "os-families-exclude": ["windows"],
         "download-url-method": ["pre-packaged-binary", "composer-default"]
     }
 }
