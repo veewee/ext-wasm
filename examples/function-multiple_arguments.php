@@ -1,13 +1,10 @@
 <?php
 
-$instance = Wasm\InstanceBuilder::fromWat(
-  <<<'EOWAT'
+$instance = new Wasm\Instance(new Wasm\Module(<<<'EOWAT'
     (module
-      (func $swap (export "swap") (param i32 i32) (result i32 i32)
-        (local.get 1) (local.get 0)
-      )
-    )
-    EOWAT
-)->build();
+      (func (export "swap") (param i32 i32) (result i32 i32)
+        (local.get 1) (local.get 0)))
+    EOWAT));
 
-var_dump($instance->swap(1, 2));
+// Several results come back as a list.
+var_dump($instance->exports->swap(1, 2)); // [2, 1]
