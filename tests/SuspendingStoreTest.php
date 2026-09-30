@@ -146,4 +146,65 @@ final class SuspendingStoreTest extends TestCase
 
         self::assertSame($kept, $fiber->getReturn());
     }
+
+    public function test_a_store_with_sync_callbacks_cannot_take_suspending_imports(): void
+    {
+        $store = new Store();
+        new Instance(new Module('(module (import "env" "f" (func)))'), ['env' => ['f' => fn () => null]], $store);
+
+        $this->expectException(\Wasm\Exception\LinkError::class);
+        $this->expectExceptionMessage('Suspending imports need a store without synchronous callbacks');
+        new Instance(new Module(self::WAIT), ['env' => ['wait' => new Suspending(fn () => null)]], $store);
+    }
+
+    public function test_an_earlier_instance_keeps_working_after_its_store_turned_async(): void
+    {
+        $store = new Store();
+        $first = (new Instance(new Module('(module (func (export "id") (param i32) (result i32) (local.get 0)))'), store: $store))->exports;
+        new Instance(new Module(self::WAIT), ['env' => ['wait' => new Suspending(fn () => null)]], $store);
+
+        self::assertSame(5, $first->id(5));
+    }
+
+    public function test_a_failed_instantiation_leaves_the_store_usable(): void
+    {
+        $store = new Store();
+        try {
+            new Instance(new Module('(module (import "env" "wait" (func)) (import "env" "gone" (func)))'), [
+                'env' => ['wait' => new Suspending(fn () => null)],
+            ], $store);
+            self::fail('Expected a LinkError for the missing import');
+        } catch (\Wasm\Exception\LinkError) {
+        }
+
+        $exports = (new Instance(new Module('(module (import "env" "f" (func (result i32))) (func (export "run") (result i32) (call 0)))'), [
+            'env' => ['f' => fn (): int => 8],
+        ], $store))->exports;
+
+        self::assertSame(8, $exports->run());
+    }
+
+    public function test_wasi_start_runs_a_module_with_a_suspending_import(): void
+    {
+        $wasi = new \Wasm\Wasi();
+        $module = new Module(<<<'EOWAT'
+            (module
+              (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+              (import "env" "later" (func $later (result i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 8) "hi\n")
+              (func (export "_start")
+                (i32.store (i32.const 0) (i32.const 8))
+                (i32.store (i32.const 4) (call $later))
+                (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 20)))))
+            EOWAT);
+        $imports = $wasi->getImportObject() + ['env' => ['later' => new Suspending(fn (): int => \Fiber::suspend())]];
+
+        $fiber = new \Fiber(fn (): int => $wasi->start(new Instance($module, $imports)));
+        $fiber->start();
+        $fiber->resume(3);
+
+        self::assertSame(0, $fiber->getReturn());
+        self::assertSame("hi\n", $wasi->stdout());
+    }
 }
