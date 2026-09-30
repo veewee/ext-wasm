@@ -1,38 +1,115 @@
 <?php
 
-// Stubs for ext-wasm
+// Stubs for wasm
 
 namespace Wasm {
-    class WasmInstance {
-        public static function fromBuilder(\Wasm\InstanceBuilder $builder): \Wasm\WasmInstance {}
+    /**
+     * The exports of an instance, like JS `instance.exports`.
+     *
+     * Wrapper objects are created once, so `$exports->f === $exports->f` holds as in JS.
+     */
+    class Exports implements \Iterator {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
 
-        public function __call(string $method, array $attributes): mixed {}
+        public function __construct() {}
 
-        public function __get(string $accessor): mixed {}
+        /**
+         * @param string $name
+         * @return mixed
+         */
+        public function __get(string $name): mixed {}
 
-        public function __set(string $accessor, mixed $value): void {}
+        /**
+         * @param string $name
+         * @return bool
+         */
+        public function __isset(string $name): bool {}
+
+        /**
+         * @return mixed
+         */
+        public function current(): mixed {}
+
+        /**
+         * @return string|null
+         */
+        public function key(): ?string {}
+
+        /**
+         * @return void
+         */
+        public function next(): void {}
+
+        /**
+         * @return void
+         */
+        public function rewind(): void {}
+
+        /**
+         * @return bool
+         */
+        public function valid(): bool {}
     }
 
-    class InstanceBuilder {
-        public static function fromWat(string $wat): \Wasm\InstanceBuilder {}
+    /**
+     * An exported wasm function, callable from PHP.
+     */
+    class Func {
+        public function __construct() {}
 
-        public function import(array $imports): void {}
+        /**
+         * @param mixed $args
+         * @return mixed
+         */
+        public function __invoke(mixed ...$args): mixed {}
 
-        public function build(): \Wasm\WasmInstance {}
+        /**
+         * Number of parameters, like JS `Function.prototype.length`.
+         *
+         * @return int
+         */
+        public function length(): int {}
     }
 
-    class Imports {
-        public static function create(): self {}
+    class Instance {
+        public readonly mixed $exports = null;
 
-        public static function define(string $namespace, string $variable, \Wasm\Type\Global $value): void {}
+        /**
+         * @param \Wasm\Module $module
+         * @param array|null $imports
+         */
+        public function __construct(\Wasm\Module $module, ?array $imports = null) {}
     }
 
+    class Module {
+        /**
+         * Compiles a wasm binary or WAT text.
+         *
+         * @param string $bytes
+         */
+        public function __construct(string $bytes) {}
+    }
 }
 
-namespace Wasm\Type {
-    class Global {
-        public static function mutable(mixed $value): self {}
+namespace Wasm\Exception {
+    class CompileError extends \Wasm\Exception\WasmException {
+        public function __construct() {}
+    }
 
-        public static function immutable(mixed $value): self {}
+    class LinkError extends \Wasm\Exception\WasmException {
+        public function __construct() {}
+    }
+
+    class RuntimeError extends \Wasm\Exception\WasmException {
+        public function __construct() {}
+    }
+
+    class WasmException extends \Exception {
+        public function __construct() {}
     }
 }

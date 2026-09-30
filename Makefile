@@ -8,8 +8,8 @@ compile:																		## compiles a release version of this extension
 	cargo build -r;
 
 stubs:																			## Generates stubs
-	cargo php stubs;
-	cat ext-wasm.stubs.php;
+	cargo build;
+	cargo php stubs -o ext-wasm.stubs.php;
 
 setup-ci:																		## Setup CI
 	make compile
@@ -29,4 +29,4 @@ phpunit:																		## Run extension tests
 	php $(if $(PHP_EXTENSION),"-d extension=$(PHP_EXTENSION)",) ./tools/phpunit.phar;
 
 find-extension:
-	@find ./target/release ./target/debug -maxdepth 1 -type f \( -iname \*.so -o -iname \*.dll -o -iname \*.dylib \) 2>/dev/null | head -1;
+	@find ./target/release ./target/debug -maxdepth 1 -type f \( -name libwasm.so -o -name libwasm.dylib -o -name wasm.dll \) 2>/dev/null | head -1;
