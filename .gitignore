@@ -7,6 +7,7 @@ tools/*.phar binary
 /examples/python/dist/
 /examples/quickjs/dist/
 /examples/rust-markdown/target/
+/examples/link-preview/target/
 /examples/oxipng/dist/
 /examples/html/target/
 /examples/typst/target/

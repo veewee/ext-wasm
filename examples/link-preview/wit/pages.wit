@@ -1,0 +1,27 @@
+package docs:link-preview@0.1.0;
+
+interface pages {
+    /// What a chat app shows when someone pastes a link.
+    record page-preview {
+        /// Where the page ended up after redirects.
+        url: string,
+        title: option<string>,
+        description: option<string>,
+        /// An absolute URL.
+        image: option<string>,
+        site-name: option<string>,
+    }
+
+    /// Fetches `url` and reads its title, description and image.
+    preview: func(url: string) -> result<page-preview, string>;
+
+    /// Fetches `url` and returns its main content as Markdown.
+    read: func(url: string) -> result<string, string>;
+}
+
+/// Also exports wasi:http/incoming-handler, which serves the same functions
+/// at /preview?url= and /read?url=, and imports wasi:http to fetch pages.
+/// Both come from the wasi crate, which declares them itself.
+world link-preview {
+    export pages;
+}
