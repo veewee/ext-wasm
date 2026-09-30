@@ -134,6 +134,20 @@ $table->set(0, $math->exports->double);
 
 `Memory`, `Table`, `GlobalVar`, `Tag` and `Instance` all accept `store:`. A store lives as long as any object in it or a `Wasm\Store` object for it. JS has no stores and lets any objects be combined.
 
+### Memory limit
+
+`wasm.memory_limit` caps the memory of each store: its linear memories, and its tables at 8 bytes per element. It takes a size as PHP's `memory_limit` does (`64M`, `1G`), and `0` or `-1` means no limit, the default. A store takes the value set when it is created, so `ini_set()` applies to instances created after it, and a store keeps its limit for its whole life. `ini_set()` refuses an invalid value and returns false.
+
+```php
+ini_set('wasm.memory_limit', '64M');
+$instance = new Wasm\Instance($module);   // this instance and its memory get 64 MiB
+ini_restore('wasm.memory_limit');
+```
+
+Growing past the limit fails the way wasm expects: `memory.grow` returns -1, and `Memory::grow()` from PHP throws. An instance whose initial memory is already over the limit is a `LinkError`, and a standalone `Memory` over it throws. Those errors name `wasm.memory_limit`. Standalone objects created after the limit changed get a new shared store, so a limit set around one library call does not reach them.
+
+There is no time limit for wasm code. PHP's `max_execution_time` does not interrupt a call that loops in wasm, but PHP's hard timeout ends the process `hard_timeout` seconds later (2 by default), without running shutdown functions. This was checked in the CLI.
+
 ### WASI
 
 `Wasm\Wasi` runs programs built for WASI, the system interface most wasm programs outside the browser use. Its shape follows Node's `WASI` class. A core module gets WASI preview1 through `getImportObject()`, and a component gets preview2 (see [Components](#components)):

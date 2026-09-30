@@ -1,3 +1,4 @@
+use crate::limits::limited;
 use ext_php_rs::binary::Binary;
 use ext_php_rs::binary_slice::BinarySlice;
 use ext_php_rs::exception::PhpResult;
@@ -31,7 +32,7 @@ impl Memory {
         let ty = MemoryType::new(page_count(initial)?, maximum.map(page_count).transpose()?);
         let store = store::choose(store, [], store::standalone)?;
         let inner = store
-            .with(|mut ctx| wasmtime::Memory::new(&mut ctx, ty))
+            .with(|mut ctx| limited(&mut ctx, |ctx| wasmtime::Memory::new(ctx, ty)))
             .map_err(|err| value_error(format!("{err:#}")))?;
         Ok(Self { store, inner })
     }
@@ -40,7 +41,7 @@ impl Memory {
     pub fn grow(&self, delta: i64) -> PhpResult<i64> {
         let delta = u64::try_from(delta).map_err(|_| value_error("delta must not be negative"))?;
         self.store
-            .with(|mut ctx| self.inner.grow(&mut ctx, delta))
+            .with(|mut ctx| limited(&mut ctx, |ctx| self.inner.grow(ctx, delta)))
             .map(|previous| previous as i64)
             .map_err(|err| value_error(format!("{err:#}")))
     }

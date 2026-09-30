@@ -38,6 +38,7 @@ impl Instance {
         store::retire_standalone(&store);
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
+            ctx.data_mut().memory.reset();
             let created = if ctx.data().is_async {
                 suspend::drive(
                     &store,
@@ -51,7 +52,7 @@ impl Instance {
                 Err(err) if err.is::<wasmtime::Trap>() || err.is::<wasmtime::ThrownException>() => {
                     return Err(call_error(&mut ctx, err));
                 }
-                Err(err) => return Err(link_error(err)),
+                Err(err) => return Err(link_error(ctx.data_mut().memory.explain(err))),
             };
             Ok::<_, ext_php_rs::exception::PhpException>(
                 instance
