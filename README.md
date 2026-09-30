@@ -227,9 +227,9 @@ A resource a component imports is implemented by a PHP class, given by name in t
 $instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::class]], wasi: $wasi);
 ```
 
-`[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each of these methods, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
+`[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each method and static function the resource declares, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
 
-Components cannot be combined with core objects: a component instance has a store of its own, and resources cannot pass between two component instances yet. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
+Components cannot be combined with core objects: a component instance has a store of its own. A resource that one component instance exports cannot be passed to another instance yet, which is a `TypeError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
 
