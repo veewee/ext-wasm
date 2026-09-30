@@ -485,10 +485,18 @@ unsafe extern "C" fn compare<T: RegisteredClass + SameValue>(
     unsafe { zend_compare(&raw mut x, &raw mut y) }
 }
 
-// zend_compare is ZEND_FASTCALL, which is the C calling convention on the
-// 64-bit targets the extension is built for.
 unsafe extern "C" {
     fn zend_std_compare_objects(a: *mut Zval, b: *mut Zval) -> std::ffi::c_int;
+}
+
+// zend_compare is ZEND_FASTCALL, which PHP for Windows defines as __vectorcall.
+#[cfg(windows)]
+unsafe extern "vectorcall" {
+    fn zend_compare(a: *mut Zval, b: *mut Zval) -> std::ffi::c_int;
+}
+
+#[cfg(not(windows))]
+unsafe extern "C" {
     fn zend_compare(a: *mut Zval, b: *mut Zval) -> std::ffi::c_int;
 }
 
