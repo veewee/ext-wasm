@@ -49,9 +49,25 @@ jobs:
             macOS) EXTENSION=target/release/libwasm.dylib ;;
             Windows) EXTENSION=target/release/wasm.dll ;;
           esac
-          for example in examples/*.php; do
-            php -d "extension=$PWD/$EXTENSION" "$example" > /dev/null
+          # Temporary diagnostics for an intermittent crash at exit on Windows:
+          # every example runs several times, with and without module unloading.
+          failures=0
+          for unload in yes no; do
+            for run in 1 2 3 4 5; do
+              for example in examples/*.php; do
+                if [ "$unload" = no ]; then export ZEND_DONT_UNLOAD_MODULES=1; else unset ZEND_DONT_UNLOAD_MODULES; fi
+                set +e
+                php -d "extension=$PWD/$EXTENSION" "$example" > /dev/null 2> stderr.txt
+                code=$?
+                set -e
+                if [ "$code" != 0 ]; then
+                  failures=$((failures + 1))
+                  echo "::warning::$example exited with $code (unload=$unload, run $run): $(cat stderr.txt)"
+                fi
+              done
+            done
           done
+          [ "$failures" = 0 ]
 
   lint:
     name: Clippy and rustfmt

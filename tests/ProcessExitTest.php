@@ -19,6 +19,18 @@ final class ProcessExitTest extends TestCase
 
     public function test_processes_exit_cleanly_after_compiling(): void
     {
+        $this->assertCleanExits(['wasm.cache' => '0']);
+    }
+
+    public function test_processes_exit_cleanly_after_using_the_compilation_cache(): void
+    {
+        $directory = sys_get_temp_dir() . '/wasm-exit-test-' . bin2hex(random_bytes(6));
+        $this->assertCleanExits(['wasm.cache_dir' => $directory]);
+    }
+
+    /** @param array<string, string> $settings */
+    private function assertCleanExits(array $settings): void
+    {
         $script = <<<'PHP'
             <?php
             $functions = '';
@@ -29,7 +41,7 @@ final class ProcessExitTest extends TestCase
             PHP;
 
         for ($run = 1; $run <= 15; $run++) {
-            $output = $this->runPhp($script, $exitCode, ['wasm.cache' => '0']);
+            $output = $this->runPhp($script, $exitCode, $settings);
             self::assertSame(0, $exitCode, "run $run exited with $exitCode: $output");
             self::assertSame('42', $output);
         }
