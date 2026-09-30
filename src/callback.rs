@@ -42,6 +42,7 @@ fn invoke(
 
     let returned = store.enter_host(caller, || {
         let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
+        let _no_fiber_switch = FiberSwitchBlock::new();
         ZendCallable::new(&callable)?.try_call(args)
     });
 
@@ -67,6 +68,34 @@ fn invoke(
     // The outer call still holds the store, so they run inside the host context.
     store.enter_host(caller, move || drop((returned, args, callable, released)));
     outcome
+}
+
+unsafe extern "C" {
+    fn zend_fiber_switch_block();
+    fn zend_fiber_switch_unblock();
+}
+
+/// Makes `Fiber::suspend()`, `resume()` and `start()` throw a FiberError while
+/// a callback runs, as PHP does for destructors during garbage collection.
+///
+/// wasmtime requires calls into wasm to return in the order they started. A
+/// callback that suspends its fiber lets another fiber call into wasm and
+/// return first, which aborts the process inside wasmtime.
+struct FiberSwitchBlock;
+
+impl FiberSwitchBlock {
+    fn new() -> Self {
+        // SAFETY: a counter in the executor globals, balanced by `drop`.
+        unsafe { zend_fiber_switch_block() };
+        Self
+    }
+}
+
+impl Drop for FiberSwitchBlock {
+    fn drop(&mut self) {
+        // SAFETY: undoes the `zend_fiber_switch_block` call of `new`.
+        unsafe { zend_fiber_switch_unblock() };
+    }
 }
 
 fn write_results(
