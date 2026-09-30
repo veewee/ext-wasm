@@ -86,6 +86,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<error::RuntimeError>()
         .class::<throw::WasmThrow>()
         .class::<module::Module>()
+        .class::<store::StoreObject>()
         .class::<func::Func>()
         .class::<global::GlobalVar>()
         .class::<memory::Memory>()

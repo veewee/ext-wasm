@@ -2,11 +2,12 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
-use wasmtime::{RefType, TableType};
+use wasmtime::{HeapTopType, RefType, TableType};
 
 use crate::error::{type_error, value_error};
-use crate::store::{self, SharedStore};
-use crate::value::{descriptor_int, descriptor_str, from_ref, to_ref};
+use crate::func::Func;
+use crate::store::{self, SharedStore, StoreObject};
+use crate::value::{descriptor_int, descriptor_str, downcast, from_ref, to_ref};
 
 /// A table of references, like JS `WebAssembly.Table`.
 #[php_class]
@@ -20,7 +21,11 @@ pub struct Table {
 #[php_impl]
 impl Table {
     /// @param array{element: 'anyfunc'|'externref', initial: int, maximum?: int} $descriptor
-    pub fn __construct(descriptor: &ZendHashTable, value: Option<&Zval>) -> PhpResult<Self> {
+    pub fn __construct(
+        descriptor: &ZendHashTable,
+        value: Option<&Zval>,
+        store: Option<&StoreObject>,
+    ) -> PhpResult<Self> {
         let element = match descriptor_str(descriptor, "element")? {
             Some("anyfunc" | "funcref") => RefType::FUNCREF,
             Some("externref") => RefType::EXTERNREF,
@@ -40,7 +45,12 @@ impl Table {
             maximum.map(to_u32).transpose()?,
         );
         let null = Zval::null();
-        let store = store::current();
+        // An externref value is a plain PHP value, even when it is a wasm object.
+        let from = value
+            .filter(|_| element.heap_type().top() == HeapTopType::Func)
+            .and_then(downcast::<Func>)
+            .map(|func| (func.store.clone(), "Func"));
+        let store = store::choose(store, from)?;
         let inner = store.with(|mut ctx| {
             let init = to_ref(&mut ctx, value.unwrap_or(&null), &element)?;
             wasmtime::Table::new(&mut ctx, ty, init).map_err(|err| value_error(format!("{err:#}")))

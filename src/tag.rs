@@ -10,7 +10,7 @@ use wasmtime::{FuncType, StoreContextMut, TagType, ValType};
 
 use crate::engine::engine;
 use crate::error::{type_error, value_error};
-use crate::store::{self, HostState, KnownTag, SharedStore};
+use crate::store::{self, HostState, KnownTag, SharedStore, StoreObject};
 use crate::value::{debug_type, downcast, parse_val_type};
 
 /// An exception tag, like JS `WebAssembly.Tag`.
@@ -32,7 +32,7 @@ impl Drop for Tag {
 #[php_impl]
 impl Tag {
     /// @param array{parameters: list<string>} $descriptor
-    pub fn __construct(descriptor: &ZendHashTable) -> PhpResult<Self> {
+    pub fn __construct(descriptor: &ZendHashTable, store: Option<&StoreObject>) -> PhpResult<Self> {
         let parameters = descriptor
             .get("parameters")
             .and_then(Zval::array)
@@ -51,7 +51,7 @@ impl Tag {
             })
             .collect::<PhpResult<Vec<ValType>>>()?;
         let ty = TagType::new(FuncType::new(engine(), parameters, []));
-        let store = store::current();
+        let store = store::choose(store, [])?;
         let inner = store
             .with(|mut ctx| wasmtime::Tag::new(&mut ctx, &ty))
             .map_err(|err| value_error(format!("{err:#}")))?;

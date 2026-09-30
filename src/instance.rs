@@ -9,7 +9,7 @@ use crate::error::link_error;
 use crate::exports::Exports;
 use crate::imports;
 use crate::module::Module;
-use crate::store;
+use crate::store::{self, StoreObject};
 use crate::throw::call_error;
 
 #[php_class]
@@ -21,8 +21,12 @@ pub struct Instance {
 
 #[php_impl]
 impl Instance {
-    pub fn __construct(module: &Module, imports: Option<&ZendHashTable>) -> PhpResult<Self> {
-        let store = store::current();
+    pub fn __construct(
+        module: &Module,
+        imports: Option<&ZendHashTable>,
+        store: Option<&StoreObject>,
+    ) -> PhpResult<Self> {
+        let store = store::choose(store, imports::stores(&module.inner, imports))?;
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
             let instance = match wasmtime::Instance::new(&mut ctx, &module.inner, &imports) {

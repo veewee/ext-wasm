@@ -7,7 +7,7 @@ use ext_php_rs::types::ZendHashTable;
 use wasmtime::MemoryType;
 
 use crate::error::{type_error, value_error};
-use crate::store::{self, SharedStore};
+use crate::store::{self, SharedStore, StoreObject};
 use crate::value::descriptor_int;
 
 /// Linear memory, like JS `WebAssembly.Memory`.
@@ -24,12 +24,12 @@ pub struct Memory {
 #[php_impl]
 impl Memory {
     /// @param array{initial: int, maximum?: int} $descriptor
-    pub fn __construct(descriptor: &ZendHashTable) -> PhpResult<Self> {
+    pub fn __construct(descriptor: &ZendHashTable, store: Option<&StoreObject>) -> PhpResult<Self> {
         let initial = descriptor_int(descriptor, "initial")?
             .ok_or_else(|| type_error("descriptor \"initial\" is required"))?;
         let maximum = descriptor_int(descriptor, "maximum")?;
         let ty = MemoryType::new(page_count(initial)?, maximum.map(page_count).transpose()?);
-        let store = store::current();
+        let store = store::choose(store, [])?;
         let inner = store
             .with(|mut ctx| wasmtime::Memory::new(&mut ctx, ty))
             .map_err(|err| value_error(format!("{err:#}")))?;

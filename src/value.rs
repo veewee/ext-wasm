@@ -6,7 +6,7 @@ use ext_php_rs::types::ZendClassObject;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::{ExternRef, HeapTopType, HeapType, Ref, RefType, StoreContextMut, Val, ValType};
 
-use crate::error::{type_error, value_error};
+use crate::error::{link_error, type_error, value_error};
 use crate::func::Func;
 use crate::store::{self, HostState, ValueKey};
 
@@ -16,12 +16,16 @@ use crate::store::{self, HostState, ValueKey};
 pub enum ConvertError {
     Type(String),
     Value(String),
+    /// A wasm object from another store.
+    Link(String),
 }
 
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Type(message) | Self::Value(message) => f.write_str(message),
+            Self::Type(message) | Self::Value(message) | Self::Link(message) => {
+                f.write_str(message)
+            }
         }
     }
 }
@@ -33,6 +37,7 @@ impl From<ConvertError> for PhpException {
         match err {
             ConvertError::Type(message) => type_error(message),
             ConvertError::Value(message) => value_error(message),
+            ConvertError::Link(message) => link_error(message),
         }
     }
 }
@@ -93,14 +98,14 @@ pub fn to_ref(
                 .map_err(|err| ConvertError::Value(format!("{err:#}")))?;
             Ok(Ref::Extern(Some(externref)))
         }
-        HeapType::Func => downcast::<Func>(value)
-            .map(|func| Ref::Func(Some(func.inner)))
-            .ok_or_else(|| {
-                ConvertError::Type(format!(
-                    "expected Wasm\\Func or null for {ty}, got {}",
-                    debug_type(value)
-                ))
-            }),
+        HeapType::Func => match downcast::<Func>(value) {
+            Some(func) if store::owns(&*ctx, &func.store) => Ok(Ref::Func(Some(func.inner))),
+            Some(_) => Err(ConvertError::Link(store::mismatch_message("Func"))),
+            None => Err(ConvertError::Type(format!(
+                "expected Wasm\\Func or null for {ty}, got {}",
+                debug_type(value)
+            ))),
+        },
         _ => Err(ConvertError::Type(format!("unsupported wasm type {ty}"))),
     }
 }

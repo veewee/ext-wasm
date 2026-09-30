@@ -11,7 +11,7 @@ use ext_php_rs::zend::{ClassEntry, ExecuteData, ExecutorGlobals};
 use wasmtime::{ExnRef, ExnRefPre, ExnType, Rooted, StoreContextMut, Val};
 
 use crate::error::{error, type_error, value_error};
-use crate::store::HostState;
+use crate::store::{self, HostState};
 use crate::tag::{Tag, remember_tag, tag_to_zval};
 use crate::value::{debug_type, downcast, from_val, to_val};
 
@@ -173,13 +173,24 @@ pub fn take_pending(
 ) -> Option<(ZBox<ZendObject>, wasmtime::Result<Rooted<ExnRef>>)> {
     let pending = ExecutorGlobals::get()
         .exception()
-        .is_some_and(|object| object.instance_of(class_entry()));
+        .is_some_and(|object| object.instance_of(class_entry()) && tag_in_store(ctx, object));
     if !pending {
         return None;
     }
     let object = ExecutorGlobals::take_exception()?;
     let exception = to_wasm(ctx, &object);
     Some((object, exception))
+}
+
+/// wasmtime cannot raise an exception with a tag of another store. Such a
+/// WasmThrow stays pending like any other PHP exception and comes back out of
+/// the PHP call that started wasm, as JS does with a tag wasm does not know.
+fn tag_in_store(ctx: &StoreContextMut<'_, HostState>, object: &ZendObject) -> bool {
+    object
+        .get_property::<&Zval>("tag")
+        .ok()
+        .and_then(downcast::<Tag>)
+        .is_some_and(|tag| store::owns(ctx, &tag.store))
 }
 
 fn to_wasm(

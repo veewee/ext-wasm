@@ -22,14 +22,47 @@ pub fn resolve(
     module
         .imports()
         .map(|import| {
-            let value = imports
-                .and_then(|imports| imports.get(import.module()))
-                .and_then(Zval::array)
-                .and_then(|namespace| namespace.get(import.name()))
+            let value = lookup(imports, &import)
                 .ok_or_else(|| link_error(format!("missing import {}", describe(&import))))?;
             to_extern(store, &import, value)
         })
         .collect()
+}
+
+/// The stores of the wasm objects among the imports, which the instance has to join.
+pub fn stores(
+    module: &wasmtime::Module,
+    imports: Option<&ZendHashTable>,
+) -> Vec<(SharedStore, &'static str)> {
+    module
+        .imports()
+        .filter_map(|import| lookup(imports, &import))
+        .filter_map(owner)
+        .collect()
+}
+
+fn lookup<'a>(imports: Option<&'a ZendHashTable>, import: &ImportType<'_>) -> Option<&'a Zval> {
+    imports
+        .and_then(|imports| imports.get(import.module()))
+        .and_then(Zval::array)
+        .and_then(|namespace| namespace.get(import.name()))
+}
+
+/// The store of a wasm object, if `value` is one.
+fn owner(value: &Zval) -> Option<(SharedStore, &'static str)> {
+    if let Some(global) = downcast::<GlobalVar>(value) {
+        return Some((global.store.clone(), "GlobalVar"));
+    }
+    if let Some(memory) = downcast::<Memory>(value) {
+        return Some((memory.store.clone(), "Memory"));
+    }
+    if let Some(table) = downcast::<Table>(value) {
+        return Some((table.store.clone(), "Table"));
+    }
+    if let Some(tag) = downcast::<Tag>(value) {
+        return Some((tag.store.clone(), "Tag"));
+    }
+    downcast::<Func>(value).map(|func| (func.store.clone(), "Func"))
 }
 
 fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpResult<Extern> {

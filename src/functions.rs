@@ -30,7 +30,7 @@ pub fn compile(bytes: BinarySlice<u8>) -> PhpResult<Module> {
 #[php(name = "Wasm\\instantiate")]
 pub fn instantiate(source: &Zval, imports: Option<&ZendHashTable>) -> PhpResult<Zval> {
     if let Some(module) = downcast::<Module>(source) {
-        return Ok(Instance::__construct(module, imports)?.into_zval(false)?);
+        return Ok(Instance::__construct(module, imports, None)?.into_zval(false)?);
     }
     let bytes = source.zend_str().ok_or_else(|| {
         type_error(format!(
@@ -39,7 +39,7 @@ pub fn instantiate(source: &Zval, imports: Option<&ZendHashTable>) -> PhpResult<
         ))
     })?;
     let module = Module::compile(bytes.as_bytes())?;
-    let instance = Instance::__construct(&module, imports)?;
+    let instance = Instance::__construct(&module, imports, None)?;
     let mut result = ZendHashTable::new();
     result.insert("module", module.into_zval(false)?)?;
     result.insert("instance", instance.into_zval(false)?)?;

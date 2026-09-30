@@ -2,12 +2,13 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
-use wasmtime::{GlobalType, Mutability, StoreContextMut, Val, ValType};
+use wasmtime::{GlobalType, HeapTopType, Mutability, StoreContextMut, Val, ValType};
 
 use crate::error::{error, link_error, type_error};
-use crate::store::{self, HostState, SharedStore};
+use crate::func::Func;
+use crate::store::{self, HostState, SharedStore, StoreObject};
 use crate::value::{
-    default_val, descriptor_bool, descriptor_str, from_val, parse_val_type, to_val,
+    default_val, descriptor_bool, descriptor_str, downcast, from_val, parse_val_type, to_val,
 };
 
 /// A wasm global, like JS `WebAssembly.Global`. Named GlobalVar because
@@ -25,7 +26,11 @@ pub struct GlobalVar {
 #[php_impl]
 impl GlobalVar {
     /// @param array{value: string, mutable?: bool} $descriptor
-    pub fn __construct(descriptor: &ZendHashTable, value: Option<&Zval>) -> PhpResult<Self> {
+    pub fn __construct(
+        descriptor: &ZendHashTable,
+        value: Option<&Zval>,
+        store: Option<&StoreObject>,
+    ) -> PhpResult<Self> {
         let ty = descriptor_str(descriptor, "value")?
             .ok_or_else(|| type_error("descriptor \"value\" is required"))?;
         let ty = parse_val_type(ty)?;
@@ -34,7 +39,12 @@ impl GlobalVar {
         } else {
             Mutability::Const
         };
-        let store = store::current();
+        // An externref value is a plain PHP value, even when it is a wasm object.
+        let from = value
+            .filter(|_| matches!(&ty, ValType::Ref(r) if r.heap_type().top() == HeapTopType::Func))
+            .and_then(downcast::<Func>)
+            .map(|func| (func.store.clone(), "Func"));
+        let store = store::choose(store, from)?;
         let inner = store.with(|mut ctx| {
             let initial = match value {
                 Some(value) if !value.is_null() => to_val(&mut ctx, value, &ty)?,

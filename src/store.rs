@@ -2,10 +2,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
 
+use ext_php_rs::exception::{PhpException, PhpResult};
+use ext_php_rs::flags::ClassFlags;
+use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
 use wasmtime::{AsContext, AsContextMut, Caller, RootScope, Store, StoreContextMut};
 
 use crate::engine::engine;
+use crate::error::link_error;
 
 #[derive(Default)]
 pub struct HostState {
@@ -171,6 +175,56 @@ pub fn of(ctx: &impl AsContext<Data = HostState>) -> SharedStore {
         .upgrade()
         // Wasm code and conversions only run while some wrapper holds the handle.
         .expect("a store in use has a live handle")
+}
+
+/// Groups wasm objects so they can be combined.
+///
+/// An object created without a store joins the store of the wasm objects it
+/// is built from, or gets a store of its own. wasmtime frees memory one whole
+/// store at a time, when no object in it is left.
+#[php_class]
+#[php(name = "Wasm\\Store")]
+#[php(flags = ClassFlags::Final)]
+pub struct StoreObject {
+    pub handle: SharedStore,
+}
+
+#[php_impl]
+impl StoreObject {
+    pub fn __construct() -> Self {
+        Self { handle: new() }
+    }
+}
+
+/// Picks the store of a new object: the explicit one, otherwise the store of
+/// the wasm objects it is built from, otherwise a fresh one.
+pub fn choose(
+    explicit: Option<&StoreObject>,
+    from: impl IntoIterator<Item = (SharedStore, &'static str)>,
+) -> PhpResult<SharedStore> {
+    let mut chosen = explicit.map(|store| store.handle.clone());
+    for (store, kind) in from {
+        match &chosen {
+            None => chosen = Some(store),
+            Some(existing) if Rc::ptr_eq(existing, &store) => {}
+            Some(_) => return Err(mismatch(kind)),
+        }
+    }
+    Ok(chosen.unwrap_or_else(current))
+}
+
+/// Whether `store` is the store `ctx` belongs to.
+pub fn owns(ctx: &impl AsContext<Data = HostState>, store: &SharedStore) -> bool {
+    std::ptr::eq(ctx.as_context().data().handle.as_ptr(), Rc::as_ptr(store))
+}
+
+pub fn mismatch_message(kind: &str) -> String {
+    format!("{kind} belongs to a different store; create both with store: $store")
+}
+
+/// wasmtime aborts when objects of two stores meet, so this is checked first.
+pub fn mismatch(kind: &str) -> PhpException {
+    link_error(mismatch_message(kind))
 }
 
 const MIN_GC_THRESHOLD: usize = 1024;

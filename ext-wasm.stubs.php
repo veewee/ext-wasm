@@ -88,8 +88,9 @@ namespace Wasm {
          *
          * @param array $descriptor
          * @param mixed $value
+         * @param \Wasm\Store|null $store
          */
-        public function __construct(array $descriptor, mixed $value = null) {}
+        public function __construct(array $descriptor, mixed $value = null, ?\Wasm\Store $store = null) {}
 
         /**
          * @param string $name
@@ -122,8 +123,9 @@ namespace Wasm {
         /**
          * @param \Wasm\Module $module
          * @param array|null $imports
+         * @param \Wasm\Store|null $store
          */
-        public function __construct(\Wasm\Module $module, ?array $imports = null) {}
+        public function __construct(\Wasm\Module $module, ?array $imports = null, ?\Wasm\Store $store = null) {}
     }
 
     /**
@@ -136,8 +138,9 @@ namespace Wasm {
          * @param array{initial: int, maximum?: int} $descriptor
          *
          * @param array $descriptor
+         * @param \Wasm\Store|null $store
          */
-        public function __construct(array $descriptor) {}
+        public function __construct(array $descriptor, ?\Wasm\Store $store = null) {}
 
         /**
          * A copy of the whole memory.
@@ -209,6 +212,17 @@ namespace Wasm {
     }
 
     /**
+     * Groups wasm objects so they can be combined.
+     *
+     * An object created without a store joins the store of the wasm objects it
+     * is built from, or gets a store of its own. wasmtime frees memory one whole
+     * store at a time, when no object in it is left.
+     */
+    class Store {
+        public function __construct() {}
+    }
+
+    /**
      * A table of references, like JS `WebAssembly.Table`.
      */
     class Table {
@@ -217,8 +231,9 @@ namespace Wasm {
          *
          * @param array $descriptor
          * @param mixed $value
+         * @param \Wasm\Store|null $store
          */
-        public function __construct(array $descriptor, mixed $value = null) {}
+        public function __construct(array $descriptor, mixed $value = null, ?\Wasm\Store $store = null) {}
 
         /**
          * @param int $index
@@ -256,8 +271,9 @@ namespace Wasm {
          * @param array{parameters: list<string>} $descriptor
          *
          * @param array $descriptor
+         * @param \Wasm\Store|null $store
          */
-        public function __construct(array $descriptor) {}
+        public function __construct(array $descriptor, ?\Wasm\Store $store = null) {}
     }
 
     /**
