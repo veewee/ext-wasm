@@ -169,14 +169,16 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and six larger ones:
+The [examples](examples) folder has small scripts for each feature, and eight larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
+- [examples/html](examples/html) sanitizes untrusted HTML with ammonia and rewrites responses with Cloudflare's lol-html, for lazy images, CSP nonces and safe links.
 - [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
 - [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
 - [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark, with the string passing explained.
+- [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
 ## Compilation cache
 

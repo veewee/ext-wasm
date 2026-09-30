@@ -106,6 +106,15 @@ jobs:
         run: |
           examples/rust-markdown/build.sh
           echo '**rust**' | php -d "extension=$PWD/target/release/libwasm.so" examples/rust-markdown/render.php | grep -q '<strong>rust</strong>'
+      - name: Build and run the HTML example
+        run: |
+          examples/html/build.sh
+          php -d "extension=$PWD/target/release/libwasm.so" examples/html/middleware.php | grep -q 'loading="lazy"'
+      - name: Build and run the Typst example
+        run: |
+          examples/typst/build.sh
+          php -d "extension=$PWD/target/release/libwasm.so" examples/typst/invoice.php invoice.pdf
+          test "$(head -c 5 invoice.pdf)" = %PDF-
 
   lint:
     name: Clippy and rustfmt
