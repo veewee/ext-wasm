@@ -4,7 +4,10 @@ mod engine;
 mod error;
 mod exports;
 mod func;
+mod global;
+mod imports;
 mod instance;
+mod memory;
 mod module;
 mod store;
 mod value;
@@ -31,6 +34,8 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<error::RuntimeError>()
         .class::<module::Module>()
         .class::<func::Func>()
+        .class::<global::GlobalVar>()
+        .class::<memory::Memory>()
         .class::<exports::Exports>()
         .class::<instance::Instance>()
 }

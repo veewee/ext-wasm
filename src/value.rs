@@ -1,7 +1,9 @@
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::DataType;
 use ext_php_rs::types::{ZendHashTable, Zval};
-use ext_php_rs::convert::IntoZval;
+use ext_php_rs::class::RegisteredClass;
+use ext_php_rs::convert::{FromZval, IntoZval};
+use ext_php_rs::types::ZendClassObject;
 use wasmtime::{Val, ValType};
 
 use crate::error::{type_error, value_error};
@@ -86,5 +88,52 @@ pub fn debug_type(value: &Zval) -> String {
             .unwrap_or_else(|| "object".into()),
         DataType::Reference => debug_type(value.dereference()),
         other => other.to_string(),
+    }
+}
+
+/// Parses a JS-style value type name ("i32", "f64", ...).
+pub fn parse_val_type(name: &str) -> PhpResult<ValType> {
+    Ok(match name {
+        "i32" => ValType::I32,
+        "i64" => ValType::I64,
+        "f32" => ValType::F32,
+        "f64" => ValType::F64,
+        other => return Err(type_error(format!("unknown wasm value type \"{other}\""))),
+    })
+}
+
+/// Returns the wrapped Rust struct when `value` is an instance of the PHP class `T`.
+pub fn downcast<T: RegisteredClass>(value: &Zval) -> Option<&T> {
+    <&ZendClassObject<T>>::from_zval(value).map(|object| &**object)
+}
+
+pub fn descriptor_str<'a>(descriptor: &'a ZendHashTable, key: &str) -> PhpResult<Option<&'a str>> {
+    match descriptor.get(key) {
+        None => Ok(None),
+        Some(value) => value
+            .str()
+            .map(Some)
+            .ok_or_else(|| type_error(format!("descriptor \"{key}\" must be a string, got {}", debug_type(value)))),
+    }
+}
+
+pub fn descriptor_int(descriptor: &ZendHashTable, key: &str) -> PhpResult<Option<i64>> {
+    match descriptor.get(key) {
+        None => Ok(None),
+        Some(value) if value.is_null() => Ok(None),
+        Some(value) => match value.long() {
+            Some(n) if n >= 0 => Ok(Some(n)),
+            Some(n) => Err(value_error(format!("descriptor \"{key}\" must not be negative, got {n}"))),
+            None => Err(type_error(format!("descriptor \"{key}\" must be an int, got {}", debug_type(value)))),
+        },
+    }
+}
+
+pub fn descriptor_bool(descriptor: &ZendHashTable, key: &str) -> PhpResult<bool> {
+    match descriptor.get(key) {
+        None => Ok(false),
+        Some(value) => value
+            .bool()
+            .ok_or_else(|| type_error(format!("descriptor \"{key}\" must be a bool, got {}", debug_type(value)))),
     }
 }

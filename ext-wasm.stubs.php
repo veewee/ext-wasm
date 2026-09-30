@@ -76,6 +76,46 @@ namespace Wasm {
         public function length(): int {}
     }
 
+    /**
+     * A wasm global, like JS `WebAssembly.Global`. Named GlobalVar because
+     * `Global` is a reserved word in PHP.
+     *
+     * @property mixed $value
+     */
+    class GlobalVar {
+        /**
+         * @param array{value: string, mutable?: bool} $descriptor
+         *
+         * @param array $descriptor
+         * @param mixed $value
+         */
+        public function __construct(array $descriptor, mixed $value = null) {}
+
+        /**
+         * @param string $name
+         * @return mixed
+         */
+        public function __get(string $name): mixed {}
+
+        /**
+         * @param string $name
+         * @return bool
+         */
+        public function __isset(string $name): bool {}
+
+        /**
+         * @param string $name
+         * @param mixed $value
+         * @return void
+         */
+        public function __set(string $name, mixed $value): void {}
+
+        /**
+         * @return mixed
+         */
+        public function valueOf(): mixed {}
+    }
+
     class Instance {
         public readonly mixed $exports = null;
 
@@ -84,6 +124,54 @@ namespace Wasm {
          * @param array|null $imports
          */
         public function __construct(\Wasm\Module $module, ?array $imports = null) {}
+    }
+
+    /**
+     * Linear memory, like JS `WebAssembly.Memory`.
+     *
+     * PHP has no shared ArrayBuffer, so reads and writes copy bytes in and out.
+     */
+    class Memory {
+        /**
+         * @param array{initial: int, maximum?: int} $descriptor
+         *
+         * @param array $descriptor
+         */
+        public function __construct(array $descriptor) {}
+
+        /**
+         * A copy of the whole memory.
+         *
+         * @return string
+         */
+        public function buffer(): string {}
+
+        /**
+         * @return int
+         */
+        public function byteLength(): int {}
+
+        /**
+         * Grows the memory by `delta` pages and returns the previous size in pages.
+         *
+         * @param int $delta
+         * @return int
+         */
+        public function grow(int $delta): int {}
+
+        /**
+         * @param int $offset
+         * @param int $length
+         * @return string
+         */
+        public function read(int $offset, int $length): string {}
+
+        /**
+         * @param int $offset
+         * @param string $data
+         * @return void
+         */
+        public function write(int $offset, string $data): void {}
     }
 
     class Module {

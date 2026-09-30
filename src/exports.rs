@@ -8,6 +8,8 @@ use wasmtime::Extern;
 
 use crate::error::error;
 use crate::func::{call, Func};
+use crate::global::GlobalVar;
+use crate::memory::Memory;
 use crate::store::SharedStore;
 
 /// The exports of an instance, like JS `instance.exports`.
@@ -87,6 +89,8 @@ impl Exports {
 fn wrap_extern(store: &SharedStore, ext: Extern) -> PhpResult<Zval> {
     match ext {
         Extern::Func(inner) => Ok(Func { store: store.clone(), inner }.into_zval(false)?),
+        Extern::Global(inner) => Ok(GlobalVar { store: store.clone(), inner }.into_zval(false)?),
+        Extern::Memory(inner) => Ok(Memory { store: store.clone(), inner }.into_zval(false)?),
         _ => Err(error("unsupported export kind")),
     }
 }
