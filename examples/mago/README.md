@@ -39,7 +39,7 @@ function greet(string $name)
 echo greet(42);
 ```
 
-Compiling the 18 MB module takes about three seconds; formatting itself takes a few milliseconds.
+Compiling the 18 MB module takes about three seconds, and formatting itself takes a few milliseconds.
 
 ## Inner workings
 
