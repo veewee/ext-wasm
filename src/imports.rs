@@ -8,6 +8,7 @@ use crate::func::Func;
 use crate::global::{GlobalVar, new_global};
 use crate::memory::Memory;
 use crate::store::SharedStore;
+use crate::suspend::Suspending;
 use crate::table::Table;
 use crate::tag::{Tag, remember_tag};
 use crate::value::{debug_type, downcast, to_val};
@@ -39,6 +40,15 @@ pub fn stores(
         .filter_map(|import| lookup(imports, &import))
         .filter_map(owner)
         .collect()
+}
+
+/// Whether any import is a `Wasm\Suspending`. Checked before any import is
+/// resolved, because the store has to be async before its first callback exists.
+pub fn has_suspending(module: &wasmtime::Module, imports: Option<&ZendHashTable>) -> bool {
+    module
+        .imports()
+        .filter_map(|import| lookup(imports, &import))
+        .any(|value| downcast::<Suspending>(value).is_some())
 }
 
 fn lookup<'a>(imports: Option<&'a ZendHashTable>, import: &ImportType<'_>) -> Option<&'a Zval> {
@@ -82,9 +92,17 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
     if let Some(func) = downcast::<Func>(value) {
         return Ok(func.inner.into());
     }
+    if let Some(suspending) = downcast::<Suspending>(value) {
+        return match import.ty() {
+            ExternType::Func(ty) => Ok(store
+                .with(|ctx| host_func(ctx, ty, &suspending.callback, true))
+                .into()),
+            _ => Err(mismatch(import, value)),
+        };
+    }
     match import.ty() {
         ExternType::Func(ty) if value.is_callable() => {
-            Ok(store.with(|ctx| host_func(ctx, ty, value)).into())
+            Ok(store.with(|ctx| host_func(ctx, ty, value, false)).into())
         }
         // JS accepts a plain number for an immutable global import.
         ExternType::Global(ty) if ty.mutability() == Mutability::Const && !value.is_object() => {

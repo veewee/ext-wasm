@@ -226,6 +226,21 @@ namespace Wasm {
     }
 
     /**
+     * Marks a function import that may suspend the calling Fiber, like JS
+     * `WebAssembly.Suspending`.
+     *
+     * Every other Fiber keeps running while wasm waits for the callback. Calling
+     * into the instance's store again before the callback returns throws a
+     * RuntimeError, so run one instance per Fiber.
+     */
+    class Suspending {
+        /**
+         * @param mixed $callback
+         */
+        public function __construct(mixed $callback) {}
+    }
+
+    /**
      * A table of references, like JS `WebAssembly.Table`.
      */
     class Table {

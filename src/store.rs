@@ -10,6 +10,7 @@ use wasmtime::{AsContext, AsContextMut, Caller, RootScope, Store, StoreContextMu
 
 use crate::engine::engine;
 use crate::error::link_error;
+use crate::suspend;
 
 #[derive(Default)]
 pub struct HostState {
@@ -20,14 +21,21 @@ pub struct HostState {
     handle: Weak<StoreHandle>,
     /// The WASI context of a store created by `Wasm\Wasi`.
     pub wasi: Option<wasmtime_wasi::p1::WasiP1Ctx>,
+    /// Set once an instance with a `Wasm\Suspending` import joins this store.
+    /// From then on every PHP callback is async and every call goes through
+    /// `suspend::drive`, because wasmtime rejects sync calls in the store.
+    pub is_async: bool,
+    /// Whether a sync PHP host function exists, which rules out turning async.
+    pub sync_callbacks: bool,
 }
 
-// SAFETY: wasmtime-wasi requires Send store data. A store is created, used and
-// dropped on one PHP thread and never handed to another, so the Rc and raw
-// pointers inside are never touched from two threads. This holds for the sync
-// p1 functions with in-memory stdio and `allow_blocking_current_thread`, which
-// run every host call on the calling thread; async WASI or streaming stdio
-// would need this revisited.
+// SAFETY: wasmtime-wasi and wasmtime's async functions require Send store
+// data. A store is created, used and dropped on one PHP thread and never
+// handed to another, so the Rc and raw pointers inside are never touched from
+// two threads. The sync p1 functions with in-memory stdio and
+// `allow_blocking_current_thread` run every host call on the calling thread,
+// and `suspend::drive` polls every async call on that thread with a no-op
+// waker. Async WASI or streaming stdio would need this revisited.
 unsafe impl Send for HostState {}
 
 /// A tag's PHP object, held without a reference.
@@ -94,6 +102,12 @@ impl Values {
         }
     }
 
+    /// Keeps a Zval to drop once the store borrow ends, for code that must
+    /// not run PHP destructors itself.
+    pub fn release(&mut self, value: Zval) {
+        self.released.push(value);
+    }
+
     pub fn get(&self, key: usize) -> &Zval {
         self.slots[key]
             .as_ref()
@@ -145,6 +159,12 @@ pub struct StoreHandle {
     /// callback that touches any wasm object (calling another export, reading
     /// memory) must go through the caller wasmtime handed to the host function.
     active: Cell<*mut Caller<'static, HostState>>,
+    /// Set while an async call waits outside wasm for its PHP callback. Its
+    /// wasm frames are then off the activation list that wasmtime's GC walks,
+    /// so nothing that can run the GC may touch the store: see `busy`.
+    parked: Cell<bool>,
+    request: RefCell<Option<suspend::Request>>,
+    response: RefCell<Option<suspend::Response>>,
 }
 
 pub type SharedStore = Rc<StoreHandle>;
@@ -194,6 +214,9 @@ pub fn new() -> SharedStore {
             },
         )),
         active: Cell::new(std::ptr::null_mut()),
+        parked: Cell::new(false),
+        request: RefCell::new(None),
+        response: RefCell::new(None),
     })
 }
 
@@ -269,10 +292,12 @@ impl StoreHandle {
     pub fn with<R>(&self, f: impl FnOnce(StoreContextMut<'_, HostState>) -> R) -> R {
         let active = self.active.get();
         if !active.is_null() {
-            // SAFETY: `active` is only non-null inside `enter_host`, which keeps
-            // the caller alive for the duration and restores the previous value
-            // before returning. No other reference to the store exists meanwhile:
-            // the outer borrow is parked inside wasmtime's call.
+            // SAFETY: `active` is only non-null inside `enter_host`, or while
+            // `park` holds the caller of a parked async call, which stays at a
+            // stable address inside wasmtime's pinned future. Both restore the
+            // previous value when they end. No other reference to the store is
+            // used meanwhile: the outer borrow waits inside wasmtime's call or
+            // inside `suspend::drive`.
             let mut scope = RootScope::new(unsafe { &mut *active });
             return f(scope.as_context_mut());
         }
@@ -293,6 +318,54 @@ impl StoreHandle {
             .replace((caller as *mut Caller<'_, HostState>).cast());
         let _restore = Restore(&self.active, previous);
         f()
+    }
+
+    /// Routes store access through the caller of a parked async call until
+    /// the guard drops.
+    pub fn park(&self, caller: *mut Caller<'static, HostState>) -> Parked<'_> {
+        let previous = self.active.replace(caller);
+        self.parked.set(true);
+        Parked(self, previous)
+    }
+
+    pub fn is_parked(&self) -> bool {
+        self.parked.get()
+    }
+
+    /// Turns the store async before any host function of an instance with
+    /// Suspending imports is created.
+    pub fn make_async(&self) -> PhpResult<()> {
+        self.with(|mut ctx| {
+            let state = ctx.data_mut();
+            if state.sync_callbacks {
+                return Err(link_error(
+                    "Suspending imports need a store without synchronous callbacks",
+                ));
+            }
+            state.is_async = true;
+            Ok(())
+        })
+    }
+
+    pub fn put_request(&self, request: suspend::Request) {
+        *self.request.borrow_mut() = Some(request);
+    }
+
+    pub fn take_request(&self) -> Option<suspend::Request> {
+        self.request.borrow_mut().take()
+    }
+
+    pub fn put_response(&self, response: suspend::Response) {
+        *self.response.borrow_mut() = Some(response);
+    }
+
+    pub fn take_response(&self) -> Option<suspend::Response> {
+        self.response.borrow_mut().take()
+    }
+
+    /// Empties the slots after a driven call, however it ended.
+    pub fn clear_slots(&self) {
+        drop((self.take_request(), self.take_response()));
     }
 
     /// Collects unreferenced externrefs once enough PHP values piled up, and
@@ -319,4 +392,20 @@ impl Drop for Restore<'_> {
     fn drop(&mut self) {
         self.0.set(self.1);
     }
+}
+
+pub struct Parked<'a>(&'a StoreHandle, *mut Caller<'static, HostState>);
+
+impl Drop for Parked<'_> {
+    fn drop(&mut self) {
+        self.0.parked.set(false);
+        self.0.active.set(self.1);
+    }
+}
+
+pub const BUSY: &str = "the store is busy with a suspended call";
+
+/// Thrown by anything that could run wasmtime's GC while a call is parked.
+pub fn busy() -> PhpException {
+    crate::error::runtime_error(wasmtime::Error::msg(BUSY))
 }

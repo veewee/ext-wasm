@@ -1,8 +1,10 @@
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::convert::IntoZvalDyn;
-use ext_php_rs::types::{ZendCallable, Zval};
+use ext_php_rs::types::{ZendCallable, ZendObject, Zval};
 use wasmtime::{AsContextMut, Caller, FuncType, Val, ValType};
 
 use crate::store::{self, HostState};
+use crate::suspend;
 use crate::throw;
 use crate::value::{debug_type, from_val, to_val};
 
@@ -11,6 +13,7 @@ pub fn host_func(
     mut ctx: impl AsContextMut<Data = HostState>,
     ty: FuncType,
     callable: &Zval,
+    suspending: bool,
 ) -> wasmtime::Func {
     let key = ctx
         .as_context_mut()
@@ -18,6 +21,10 @@ pub fn host_func(
         .values
         .insert_permanent(callable.shallow_clone());
     let result_types: Vec<ValType> = ty.results().collect();
+    if ctx.as_context().data().is_async {
+        return suspend::host_func(ctx, ty, key, result_types, suspending);
+    }
+    ctx.as_context_mut().data_mut().sync_callbacks = true;
     wasmtime::Func::new(ctx, ty, move |mut caller, params, results| {
         invoke(&mut caller, key, &result_types, params, results)
     })
@@ -46,23 +53,13 @@ fn invoke(
         ZendCallable::new(&callable)?.try_call(args)
     });
 
-    let mut released = Vec::new();
-    let outcome = match &returned {
-        Ok(value) => write_results(caller, value, result_types, results),
-        Err(err) => {
-            let mut ctx = caller.as_context_mut();
-            // A WasmThrow becomes a wasm exception that wasm code can catch.
-            // Any other PHP exception stays pending in the engine while wasm
-            // unwinds, and the PHP entry point that started the call rethrows it.
-            match throw::take_pending(&mut ctx) {
-                Some((object, exception)) => {
-                    released.push(object);
-                    exception.and_then(|exception| ctx.throw(exception))
-                }
-                None => Err(wasmtime::Error::msg(format!("PHP callback failed: {err}"))),
-            }
-        }
-    };
+    let (outcome, thrown) = settle(
+        caller,
+        returned.as_ref().map_err(ToString::to_string),
+        result_types,
+        results,
+    );
+    let released: Vec<_> = thrown.into_iter().collect();
 
     // Releasing these can run PHP destructors, which may use wasm objects again.
     // The outer call still holds the store, so they run inside the host context.
@@ -71,6 +68,36 @@ fn invoke(
         drop((returned, args, callable, released));
     });
     outcome
+}
+
+/// Writes a callback's return value into `results`, or raises what it threw.
+///
+/// A WasmThrow becomes a wasm exception that wasm code can catch; its PHP
+/// object is handed back for the caller to release. Any other PHP exception
+/// stays pending in the engine while wasm unwinds, and the PHP entry point
+/// that started the call rethrows it.
+pub fn settle(
+    caller: &mut Caller<'_, HostState>,
+    returned: Result<&Zval, String>,
+    result_types: &[ValType],
+    results: &mut [Val],
+) -> (wasmtime::Result<()>, Option<ZBox<ZendObject>>) {
+    match returned {
+        Ok(value) => (write_results(caller, value, result_types, results), None),
+        Err(err) => {
+            let mut ctx = caller.as_context_mut();
+            match throw::take_pending(&mut ctx) {
+                Some((object, exception)) => (
+                    exception.and_then(|exception| ctx.throw(exception)),
+                    Some(object),
+                ),
+                None => (
+                    Err(wasmtime::Error::msg(format!("PHP callback failed: {err}"))),
+                    None,
+                ),
+            }
+        }
+    }
 }
 
 unsafe extern "C" {
@@ -84,10 +111,10 @@ unsafe extern "C" {
 /// wasmtime requires calls into wasm to return in the order they started. A
 /// callback that suspends its fiber lets another fiber call into wasm and
 /// return first, which aborts the process inside wasmtime.
-struct FiberSwitchBlock;
+pub(crate) struct FiberSwitchBlock;
 
 impl FiberSwitchBlock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: a counter in the executor globals, balanced by `drop`.
         unsafe { zend_fiber_switch_block() };
         Self

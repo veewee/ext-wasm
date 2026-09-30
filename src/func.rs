@@ -2,10 +2,11 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
-use wasmtime::{Val, ValType};
+use wasmtime::{StoreContextMut, Val, ValType};
 
 use crate::error::argument_count_error;
-use crate::store::SharedStore;
+use crate::store::{self, HostState, SharedStore, StoreHandle};
+use crate::suspend;
 use crate::throw::call_error;
 use crate::value::{default_val, results_to_zval, to_val};
 
@@ -32,6 +33,9 @@ impl Func {
 }
 
 pub fn call(store: &SharedStore, func: &wasmtime::Func, args: &[&Zval]) -> PhpResult<Zval> {
+    if store.is_parked() {
+        return Err(store::busy());
+    }
     store.with(|mut ctx| {
         let ty = func.ty(&ctx);
         let params: Vec<ValType> = ty.params().collect();
@@ -48,9 +52,24 @@ pub fn call(store: &SharedStore, func: &wasmtime::Func, args: &[&Zval]) -> PhpRe
             .map(|(arg, ty)| to_val(&mut ctx, arg, ty))
             .collect::<Result<Vec<Val>, _>>()?;
         let mut results: Vec<Val> = ty.results().map(|ty| default_val(&ty)).collect();
-        if let Err(err) = func.call(&mut ctx, &args, &mut results) {
+        if let Err(err) = run(store, &mut ctx, func, &args, &mut results) {
             return Err(call_error(&mut ctx, err));
         }
         results_to_zval(&mut ctx, &results)
     })
+}
+
+/// Calls `func`, through `suspend::drive` when the store is async.
+pub fn run(
+    store: &StoreHandle,
+    ctx: &mut StoreContextMut<'_, HostState>,
+    func: &wasmtime::Func,
+    params: &[Val],
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
+    if ctx.data().is_async {
+        suspend::drive(store, func.call_async(&mut *ctx, params, results))
+    } else {
+        func.call(&mut *ctx, params, results)
+    }
 }

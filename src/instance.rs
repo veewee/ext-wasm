@@ -10,6 +10,7 @@ use crate::exports::Exports;
 use crate::imports;
 use crate::module::Module;
 use crate::store::{self, StoreObject};
+use crate::suspend;
 use crate::throw::call_error;
 use crate::value::downcast;
 
@@ -28,10 +29,24 @@ impl Instance {
         store: Option<&StoreObject>,
     ) -> PhpResult<Self> {
         let store = store::choose(store, imports::stores(&module.inner, imports), store::new)?;
+        if store.is_parked() {
+            return Err(store::busy());
+        }
+        if imports::has_suspending(&module.inner, imports) {
+            store.make_async()?;
+        }
         store::retire_standalone(&store);
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
-            let instance = match wasmtime::Instance::new(&mut ctx, &module.inner, &imports) {
+            let created = if ctx.data().is_async {
+                suspend::drive(
+                    &store,
+                    wasmtime::Instance::new_async(&mut ctx, &module.inner, &imports),
+                )
+            } else {
+                wasmtime::Instance::new(&mut ctx, &module.inner, &imports)
+            };
+            let instance = match created {
                 Ok(instance) => instance,
                 Err(err) if err.is::<wasmtime::Trap>() || err.is::<wasmtime::ThrownException>() => {
                     return Err(call_error(&mut ctx, err));

@@ -12,6 +12,7 @@ mod instance;
 mod memory;
 mod module;
 mod store;
+mod suspend;
 mod table;
 mod tag;
 mod throw;
@@ -88,6 +89,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<throw::WasmThrow>()
         .class::<module::Module>()
         .class::<store::StoreObject>()
+        .class::<suspend::Suspending>()
         .class::<wasi::Wasi>()
         .class::<func::Func>()
         .class::<global::GlobalVar>()
