@@ -1,0 +1,126 @@
+use ext_php_rs::convert::IntoZval;
+use ext_php_rs::exception::PhpResult;
+use ext_php_rs::flags::ClassFlags;
+use ext_php_rs::prelude::*;
+use ext_php_rs::types::{ZendHashTable, Zval};
+use ext_php_rs::zend::ce;
+use wasmtime::component::types::{ComponentExtern, ComponentItem};
+use wasmtime::component::{ComponentExportIndex, Instance};
+use wasmtime::{AsContextMut, StoreContextMut};
+
+use crate::component::func::Func;
+use crate::component::value::camel;
+use crate::engine::engine;
+use crate::error::error;
+use crate::store::{HostState, SharedStore};
+use crate::value::downcast;
+
+/// The exports of a component instance, or of one interface it exports.
+///
+/// Functions are camelCase methods; `get()` takes any export by its WIT name,
+/// with or without version.
+#[php_class]
+#[php(name = "Wasm\\Component\\Exports")]
+#[php(flags = ClassFlags::Final)]
+#[php(implements(ce = ce::iterator, stub = "\\Iterator"))]
+pub struct Exports {
+    entries: Vec<(String, Zval)>,
+    position: usize,
+}
+
+impl Exports {
+    /// Resolves `items`, the exports of `instance` below `parent`.
+    pub fn new<'a>(
+        store: &SharedStore,
+        ctx: &mut StoreContextMut<'_, HostState>,
+        instance: &Instance,
+        parent: Option<&ComponentExportIndex>,
+        items: impl Iterator<Item = (&'a str, ComponentExtern<'a>)>,
+    ) -> PhpResult<Self> {
+        let mut entries = Vec::new();
+        for (name, item) in items {
+            let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name) else {
+                continue;
+            };
+            let object = match &item.ty {
+                ComponentItem::ComponentFunc(_) => {
+                    let Some(inner) = instance.get_func(ctx.as_context_mut(), index) else {
+                        continue;
+                    };
+                    Func {
+                        store: store.clone(),
+                        inner,
+                    }
+                    .into_zval(false)?
+                }
+                ComponentItem::ComponentInstance(nested) => {
+                    Self::new(store, ctx, instance, Some(&index), nested.exports(engine()))?
+                        .into_zval(false)?
+                }
+                _ => continue,
+            };
+            entries.push((name.to_string(), object));
+        }
+        Ok(Self {
+            entries,
+            position: 0,
+        })
+    }
+
+    fn find(&self, name: &str) -> PhpResult<&Zval> {
+        self.entries
+            .iter()
+            .find(|(export, _)| export == name)
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .find(|(export, _)| export.split('@').next() == Some(name))
+            })
+            .map(|(_, object)| object)
+            .ok_or_else(|| error(format!("component has no export named \"{name}\"")))
+    }
+}
+
+#[php_impl]
+impl Exports {
+    /// @return \Wasm\Component\Func|\Wasm\Component\Exports
+    pub fn get(&self, name: String) -> PhpResult<Zval> {
+        Ok(self.find(&name)?.shallow_clone())
+    }
+
+    pub fn __call(&self, name: String, arguments: &ZendHashTable) -> PhpResult<Zval> {
+        let func = self
+            .entries
+            .iter()
+            .filter_map(|(export, object)| downcast::<Func>(object).map(|func| (export, func)))
+            .find(|(export, _)| camel(export) == name)
+            .map(|(_, func)| func)
+            .ok_or_else(|| error(format!("component has no function named \"{name}\"")))?;
+        let args: Vec<&Zval> = arguments.values().collect();
+        func.call(&args)
+    }
+
+    pub fn current(&self) -> Zval {
+        self.entries
+            .get(self.position)
+            .map_or_else(Zval::null, |(_, object)| object.shallow_clone())
+    }
+
+    pub fn key(&self) -> Option<String> {
+        self.entries
+            .get(self.position)
+            .map(|(name, _)| name.clone())
+    }
+
+    pub fn next(&mut self) {
+        self.position += 1;
+    }
+
+    pub fn rewind(&mut self) {
+        self.position = 0;
+    }
+
+    pub fn valid(&self) -> bool {
+        self.position < self.entries.len()
+    }
+}

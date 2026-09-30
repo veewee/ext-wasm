@@ -402,6 +402,82 @@ namespace Wasm\Component {
          */
         public function imports(): array {}
     }
+
+    /**
+     * The exports of a component instance, or of one interface it exports.
+     *
+     * Functions are camelCase methods; `get()` takes any export by its WIT name,
+     * with or without version.
+     */
+    class Exports implements \Iterator {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        public function __construct() {}
+
+        /**
+         * @return mixed
+         */
+        public function current(): mixed {}
+
+        /**
+         * @return \Wasm\Component\Func|\Wasm\Component\Exports
+         *
+         * @param string $name
+         */
+        public function get(string $name): mixed {}
+
+        /**
+         * @return string|null
+         */
+        public function key(): ?string {}
+
+        /**
+         * @return void
+         */
+        public function next(): void {}
+
+        /**
+         * @return void
+         */
+        public function rewind(): void {}
+
+        /**
+         * @return bool
+         */
+        public function valid(): bool {}
+    }
+
+    /**
+     * An exported component function, callable from PHP.
+     */
+    class Func {
+        public function __construct() {}
+
+        /**
+         * @param mixed $args
+         * @return mixed
+         */
+        public function __invoke(mixed ...$args): mixed {}
+    }
+
+    /**
+     * An instance of a component, with a store of its own.
+     */
+    class Instance {
+        public readonly mixed $exports = null;
+
+        /**
+         * @param array<string, callable|array<string, callable>>|null $imports
+         *
+         * @param \Wasm\Component\Component $component
+         */
+        public function __construct(\Wasm\Component\Component $component, ?array $imports = null) {}
+    }
 }
 
 namespace Wasm\Exception {

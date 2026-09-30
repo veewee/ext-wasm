@@ -1,5 +1,10 @@
 //! WebAssembly components, the typed counterpart of core modules.
 
+pub mod exports;
+pub mod func;
+pub mod instance;
+pub mod value;
+
 use ext_php_rs::binary_slice::BinarySlice;
 use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
