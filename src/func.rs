@@ -5,8 +5,8 @@ use ext_php_rs::types::Zval;
 use wasmtime::{Val, ValType};
 
 use crate::error::argument_count_error;
-use crate::throw::call_error;
 use crate::store::SharedStore;
+use crate::throw::call_error;
 use crate::value::{default_val, results_to_zval, to_val};
 
 /// An exported wasm function, callable from PHP.
@@ -26,7 +26,8 @@ impl Func {
 
     /// Number of parameters, like JS `Function.prototype.length`.
     pub fn length(&self) -> i64 {
-        self.store.with(|ctx| self.inner.ty(&ctx).params().len() as i64)
+        self.store
+            .with(|ctx| self.inner.ty(&ctx).params().len() as i64)
     }
 }
 

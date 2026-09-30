@@ -24,13 +24,21 @@ impl Table {
         let element = match descriptor_str(descriptor, "element")? {
             Some("anyfunc" | "funcref") => RefType::FUNCREF,
             Some("externref") => RefType::EXTERNREF,
-            Some(other) => return Err(type_error(format!("unknown table element type \"{other}\""))),
+            Some(other) => {
+                return Err(type_error(format!(
+                    "unknown table element type \"{other}\""
+                )));
+            }
             None => return Err(type_error("descriptor \"element\" is required")),
         };
         let initial = descriptor_int(descriptor, "initial")?
             .ok_or_else(|| type_error("descriptor \"initial\" is required"))?;
         let maximum = descriptor_int(descriptor, "maximum")?;
-        let ty = TableType::new(element.clone(), to_u32(initial)?, maximum.map(to_u32).transpose()?);
+        let ty = TableType::new(
+            element.clone(),
+            to_u32(initial)?,
+            maximum.map(to_u32).transpose()?,
+        );
         let null = Zval::null();
         let store = store::current();
         let inner = store.with(|mut ctx| {
@@ -83,7 +91,8 @@ impl Table {
 }
 
 fn to_u32(value: i64) -> PhpResult<u32> {
-    u32::try_from(value).map_err(|_| value_error(format!("{value} is out of range for a table size")))
+    u32::try_from(value)
+        .map_err(|_| value_error(format!("{value} is out of range for a table size")))
 }
 
 fn to_index(index: i64) -> PhpResult<u64> {

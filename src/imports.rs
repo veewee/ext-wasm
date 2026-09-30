@@ -5,16 +5,20 @@ use wasmtime::{Extern, ExternType, ImportType, Mutability};
 use crate::callback::host_func;
 use crate::error::link_error;
 use crate::func::Func;
-use crate::global::{new_global, GlobalVar};
+use crate::global::{GlobalVar, new_global};
 use crate::memory::Memory;
-use crate::table::Table;
-use crate::tag::{remember_tag, Tag};
 use crate::store::SharedStore;
+use crate::table::Table;
+use crate::tag::{Tag, remember_tag};
 use crate::value::{debug_type, downcast, to_val};
 
 /// Resolves a JS-style import object (`['env' => ['name' => $value]]`) against
 /// the imports the module declares, in declaration order.
-pub fn resolve(store: &SharedStore, module: &wasmtime::Module, imports: Option<&ZendHashTable>) -> PhpResult<Vec<Extern>> {
+pub fn resolve(
+    store: &SharedStore,
+    module: &wasmtime::Module,
+    imports: Option<&ZendHashTable>,
+) -> PhpResult<Vec<Extern>> {
     module
         .imports()
         .map(|import| {
@@ -46,11 +50,14 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
         return Ok(func.inner.into());
     }
     match import.ty() {
-        ExternType::Func(ty) if value.is_callable() => Ok(store.with(|ctx| host_func(ctx, ty, value)).into()),
+        ExternType::Func(ty) if value.is_callable() => {
+            Ok(store.with(|ctx| host_func(ctx, ty, value)).into())
+        }
         // JS accepts a plain number for an immutable global import.
         ExternType::Global(ty) if ty.mutability() == Mutability::Const && !value.is_object() => {
             store.with(|mut ctx| {
-                let val = to_val(&mut ctx, value, ty.content()).map_err(|_| mismatch(import, value))?;
+                let val =
+                    to_val(&mut ctx, value, ty.content()).map_err(|_| mismatch(import, value))?;
                 Ok(new_global(&mut ctx, ty.content().clone(), Mutability::Const, val)?.into())
             })
         }
@@ -59,7 +66,12 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
 }
 
 fn mismatch(import: &ImportType<'_>, value: &Zval) -> ext_php_rs::exception::PhpException {
-    link_error(format!("import {} expects {}, got {}", describe(import), kind(&import.ty()), debug_type(value)))
+    link_error(format!(
+        "import {} expects {}, got {}",
+        describe(import),
+        kind(&import.ty()),
+        debug_type(value)
+    ))
 }
 
 fn describe(import: &ImportType<'_>) -> String {

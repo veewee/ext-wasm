@@ -53,7 +53,11 @@ impl Module {
     /// @return list<string>
     pub fn custom_sections(module: &Module, name: String) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
-        for (_, data) in module.custom_sections.iter().filter(|(section, _)| *section == name) {
+        for (_, data) in module
+            .custom_sections
+            .iter()
+            .filter(|(section, _)| *section == name)
+        {
             list.push(ext_php_rs::binary::Binary::from(data.clone()))?;
         }
         Ok(list)
@@ -64,19 +68,25 @@ impl Module {
     pub fn compile(bytes: &[u8]) -> PhpResult<Self> {
         let binary = wat::parse_bytes(bytes).map_err(compile_error)?;
         let inner = wasmtime::Module::from_binary(engine(), &binary).map_err(compile_error)?;
-        Ok(Self { inner, custom_sections: custom_sections(&binary) })
+        Ok(Self {
+            inner,
+            custom_sections: custom_sections(&binary),
+        })
     }
 }
 
 pub fn validate(bytes: &[u8]) -> bool {
-    wat::parse_bytes(bytes).is_ok_and(|binary| wasmtime::Module::validate(engine(), &binary).is_ok())
+    wat::parse_bytes(bytes)
+        .is_ok_and(|binary| wasmtime::Module::validate(engine(), &binary).is_ok())
 }
 
 fn custom_sections(binary: &[u8]) -> Vec<(String, Vec<u8>)> {
     wasmparser::Parser::new(0)
         .parse_all(binary)
         .filter_map(|payload| match payload {
-            Ok(wasmparser::Payload::CustomSection(section)) => Some((section.name().to_string(), section.data().to_vec())),
+            Ok(wasmparser::Payload::CustomSection(section)) => {
+                Some((section.name().to_string(), section.data().to_vec()))
+            }
             _ => None,
         })
         .collect()

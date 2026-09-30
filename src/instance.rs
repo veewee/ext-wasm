@@ -6,11 +6,11 @@ use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::Extern;
 
 use crate::error::link_error;
-use crate::throw::call_error;
-use crate::imports;
 use crate::exports::Exports;
+use crate::imports;
 use crate::module::Module;
 use crate::store;
+use crate::throw::call_error;
 
 #[php_class]
 #[php(name = "Wasm\\Instance")]

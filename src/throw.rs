@@ -11,7 +11,7 @@ use wasmtime::{ExnRef, ExnRefPre, ExnType, Rooted, StoreContextMut, Val};
 
 use crate::error::{error, type_error, value_error};
 use crate::store::HostState;
-use crate::tag::{remember_tag, tag_to_zval, Tag};
+use crate::tag::{Tag, remember_tag, tag_to_zval};
 use crate::value::{debug_type, downcast, from_val, to_val};
 
 /// A wasm exception, like JS `WebAssembly.Exception`.
@@ -38,19 +38,21 @@ impl WasmThrow {
 }
 
 fn declare_properties(builder: ClassBuilder) -> ClassBuilder {
-    ["tag", "payload"].into_iter().fold(builder, |builder, name| {
-        builder.property(ClassProperty {
-            name: name.into(),
-            flags: PropertyFlags::Public,
-            // Defaults of internal classes must not be refcounted, so the payload starts as null too.
-            default: Some(Box::new(|| Ok(Zval::null()))),
-            docs: &[],
-            ty: None,
-            nullable: true,
-            readonly: false,
-            default_stub: Some("null".into()),
+    ["tag", "payload"]
+        .into_iter()
+        .fold(builder, |builder, name| {
+            builder.property(ClassProperty {
+                name: name.into(),
+                flags: PropertyFlags::Public,
+                // Defaults of internal classes must not be refcounted, so the payload starts as null too.
+                default: Some(Box::new(|| Ok(Zval::null()))),
+                docs: &[],
+                ty: None,
+                nullable: true,
+                readonly: false,
+                default_stub: Some("null".into()),
+            })
         })
-    })
 }
 
 pub fn class_entry() -> &'static ClassEntry {
@@ -83,8 +85,12 @@ ext_php_rs::zend_fastcall! {
 }
 
 fn initialize(this: &mut ZendObject, tag_zval: &Zval, payload: &Zval) -> PhpResult<()> {
-    let tag = downcast::<Tag>(tag_zval)
-        .ok_or_else(|| type_error(format!("WasmThrow::__construct(): Argument #1 ($tag) must be of type Wasm\\Tag, {} given", debug_type(tag_zval))))?;
+    let tag = downcast::<Tag>(tag_zval).ok_or_else(|| {
+        type_error(format!(
+            "WasmThrow::__construct(): Argument #1 ($tag) must be of type Wasm\\Tag, {} given",
+            debug_type(tag_zval)
+        ))
+    })?;
     let values: Vec<&Zval> = match payload.array() {
         Some(list) => list.values().collect(),
         None if payload.is_null() => Vec::new(),
@@ -110,7 +116,11 @@ fn initialize(this: &mut ZendObject, tag_zval: &Zval, payload: &Zval) -> PhpResu
     Ok(())
 }
 
-fn fields(ctx: &mut StoreContextMut<'_, HostState>, tag: &wasmtime::Tag, values: &[&Zval]) -> PhpResult<Vec<Val>> {
+fn fields(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    tag: &wasmtime::Tag,
+    values: &[&Zval],
+) -> PhpResult<Vec<Val>> {
     let ty = tag.ty(&*ctx);
     let params: Vec<_> = ty.ty().params().collect();
     if params.len() != values.len() {
@@ -128,7 +138,10 @@ fn fields(ctx: &mut StoreContextMut<'_, HostState>, tag: &wasmtime::Tag, values:
 }
 
 /// Turns a wasm exception that reached PHP into a thrown `WasmThrow`.
-pub fn from_wasm(ctx: &mut StoreContextMut<'_, HostState>, exception: Rooted<ExnRef>) -> PhpException {
+pub fn from_wasm(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    exception: Rooted<ExnRef>,
+) -> PhpException {
     match to_php(ctx, exception) {
         Ok(object) => PhpException::from_message(String::new()).with_object(object),
         Err(err) => err,
@@ -152,8 +165,12 @@ fn to_php(ctx: &mut StoreContextMut<'_, HostState>, exception: Rooted<ExnRef>) -
 }
 
 /// Takes a pending PHP `WasmThrow`, if any, and turns it into a wasm exception.
-pub fn take_pending(ctx: &mut StoreContextMut<'_, HostState>) -> Option<wasmtime::Result<Rooted<ExnRef>>> {
-    let pending = ExecutorGlobals::get().exception().is_some_and(|object| object.instance_of(class_entry()));
+pub fn take_pending(
+    ctx: &mut StoreContextMut<'_, HostState>,
+) -> Option<wasmtime::Result<Rooted<ExnRef>>> {
+    let pending = ExecutorGlobals::get()
+        .exception()
+        .is_some_and(|object| object.instance_of(class_entry()));
     if !pending {
         return None;
     }
@@ -161,12 +178,24 @@ pub fn take_pending(ctx: &mut StoreContextMut<'_, HostState>) -> Option<wasmtime
     Some(to_wasm(ctx, &object))
 }
 
-fn to_wasm(ctx: &mut StoreContextMut<'_, HostState>, object: &ZendObject) -> wasmtime::Result<Rooted<ExnRef>> {
+fn to_wasm(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    object: &ZendObject,
+) -> wasmtime::Result<Rooted<ExnRef>> {
     let invalid = |message: &str| wasmtime::Error::msg(format!("invalid WasmThrow: {message}"));
-    let tag_zval: &Zval = object.get_property("tag").map_err(|_| invalid("missing tag"))?;
-    let tag = downcast::<Tag>(tag_zval).ok_or_else(|| invalid("tag is not a Wasm\\Tag"))?.inner;
-    let payload: &Zval = object.get_property("payload").map_err(|_| invalid("missing payload"))?;
-    let values: Vec<&Zval> = payload.array().map(|list| list.values().collect()).unwrap_or_default();
+    let tag_zval: &Zval = object
+        .get_property("tag")
+        .map_err(|_| invalid("missing tag"))?;
+    let tag = downcast::<Tag>(tag_zval)
+        .ok_or_else(|| invalid("tag is not a Wasm\\Tag"))?
+        .inner;
+    let payload: &Zval = object
+        .get_property("payload")
+        .map_err(|_| invalid("missing payload"))?;
+    let values: Vec<&Zval> = payload
+        .array()
+        .map(|list| list.values().collect())
+        .unwrap_or_default();
     let fields = {
         let ty = tag.ty(&*ctx);
         let params: Vec<_> = ty.ty().params().collect();

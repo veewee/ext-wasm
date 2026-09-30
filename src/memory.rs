@@ -50,7 +50,11 @@ impl Memory {
         let mut buffer = vec![0; length];
         self.store
             .with(|ctx| self.inner.read(&ctx, offset, &mut buffer))
-            .map_err(|_| value_error(format!("reading {length} byte(s) at offset {offset} is out of bounds")))?;
+            .map_err(|_| {
+                value_error(format!(
+                    "reading {length} byte(s) at offset {offset} is out of bounds"
+                ))
+            })?;
         Ok(buffer.into())
     }
 
@@ -58,7 +62,12 @@ impl Memory {
         let offset = to_usize(offset, "offset")?;
         self.store
             .with(|mut ctx| self.inner.write(&mut ctx, offset, &data))
-            .map_err(|_| value_error(format!("writing {} byte(s) at offset {offset} is out of bounds", data.len())))
+            .map_err(|_| {
+                value_error(format!(
+                    "writing {} byte(s) at offset {offset} is out of bounds",
+                    data.len()
+                ))
+            })
     }
 
     pub fn byte_length(&self) -> i64 {

@@ -6,7 +6,9 @@ use wasmtime::{GlobalType, Mutability, StoreContextMut, Val, ValType};
 
 use crate::error::{error, link_error, type_error};
 use crate::store::{self, HostState, SharedStore};
-use crate::value::{default_val, descriptor_bool, descriptor_str, from_val, parse_val_type, to_val};
+use crate::value::{
+    default_val, descriptor_bool, descriptor_str, from_val, parse_val_type, to_val,
+};
 
 /// A wasm global, like JS `WebAssembly.Global`. Named GlobalVar because
 /// `Global` is a reserved word in PHP.
@@ -27,7 +29,11 @@ impl GlobalVar {
         let ty = descriptor_str(descriptor, "value")?
             .ok_or_else(|| type_error("descriptor \"value\" is required"))?;
         let ty = parse_val_type(ty)?;
-        let mutability = if descriptor_bool(descriptor, "mutable")? { Mutability::Var } else { Mutability::Const };
+        let mutability = if descriptor_bool(descriptor, "mutable")? {
+            Mutability::Var
+        } else {
+            Mutability::Const
+        };
         let store = store::current();
         let inner = store.with(|mut ctx| {
             let initial = match value {
@@ -52,7 +58,9 @@ impl GlobalVar {
                 return Err(type_error("cannot set the value of an immutable global"));
             }
             let val = to_val(&mut ctx, value, ty.content())?;
-            self.inner.set(&mut ctx, val).map_err(|err| type_error(format!("{err:#}")))
+            self.inner
+                .set(&mut ctx, val)
+                .map_err(|err| type_error(format!("{err:#}")))
         })
     }
 
@@ -70,7 +78,11 @@ impl GlobalVar {
 
 // A real property needs an infallible getter, and reading a value can fail.
 fn property(name: &str) -> PhpResult<()> {
-    if name == "value" { Ok(()) } else { Err(error(format!("undefined property GlobalVar::${name}"))) }
+    if name == "value" {
+        Ok(())
+    } else {
+        Err(error(format!("undefined property GlobalVar::${name}")))
+    }
 }
 
 pub fn new_global(

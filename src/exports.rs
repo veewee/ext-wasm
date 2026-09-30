@@ -7,12 +7,12 @@ use ext_php_rs::zend::ce;
 use wasmtime::Extern;
 
 use crate::error::error;
-use crate::func::{call, Func};
+use crate::func::{Func, call};
 use crate::global::GlobalVar;
 use crate::memory::Memory;
+use crate::store::SharedStore;
 use crate::table::Table;
 use crate::tag::tag_to_zval;
-use crate::store::SharedStore;
 
 /// The exports of an instance, like JS `instance.exports`.
 ///
@@ -36,7 +36,11 @@ impl Exports {
                 Ok((name, ext, object))
             })
             .collect::<PhpResult<_>>()?;
-        Ok(Self { store, entries, position: 0 })
+        Ok(Self {
+            store,
+            entries,
+            position: 0,
+        })
     }
 
     fn find(&self, name: &str) -> PhpResult<&(String, Extern, Zval)> {
@@ -72,7 +76,9 @@ impl Exports {
     }
 
     pub fn key(&self) -> Option<String> {
-        self.entries.get(self.position).map(|(name, _, _)| name.clone())
+        self.entries
+            .get(self.position)
+            .map(|(name, _, _)| name.clone())
     }
 
     pub fn next(&mut self) {
@@ -90,10 +96,26 @@ impl Exports {
 
 fn wrap_extern(store: &SharedStore, ext: Extern) -> PhpResult<Zval> {
     match ext {
-        Extern::Func(inner) => Ok(Func { store: store.clone(), inner }.into_zval(false)?),
-        Extern::Global(inner) => Ok(GlobalVar { store: store.clone(), inner }.into_zval(false)?),
-        Extern::Memory(inner) => Ok(Memory { store: store.clone(), inner }.into_zval(false)?),
-        Extern::Table(inner) => Ok(Table { store: store.clone(), inner }.into_zval(false)?),
+        Extern::Func(inner) => Ok(Func {
+            store: store.clone(),
+            inner,
+        }
+        .into_zval(false)?),
+        Extern::Global(inner) => Ok(GlobalVar {
+            store: store.clone(),
+            inner,
+        }
+        .into_zval(false)?),
+        Extern::Memory(inner) => Ok(Memory {
+            store: store.clone(),
+            inner,
+        }
+        .into_zval(false)?),
+        Extern::Table(inner) => Ok(Table {
+            store: store.clone(),
+            inner,
+        }
+        .into_zval(false)?),
         Extern::Tag(inner) => store.with(|mut ctx| tag_to_zval(&mut ctx, &inner)),
         _ => Err(error("unsupported export kind")),
     }

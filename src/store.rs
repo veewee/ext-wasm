@@ -61,11 +61,16 @@ impl Values {
 
     /// Stores a value until wasm drops the returned key.
     pub fn insert_ref(&mut self, value: Zval) -> ValueKey {
-        ValueKey { key: self.insert(value), freed: self.freed.clone() }
+        ValueKey {
+            key: self.insert(value),
+            freed: self.freed.clone(),
+        }
     }
 
     pub fn get(&self, key: usize) -> &Zval {
-        self.slots[key].as_ref().expect("wasm only holds keys of live values")
+        self.slots[key]
+            .as_ref()
+            .expect("wasm only holds keys of live values")
     }
 
     fn insert(&mut self, value: Zval) -> usize {
@@ -80,7 +85,11 @@ impl Values {
     }
 
     fn reclaim(&mut self) {
-        let freed = self.freed.lock().map(|mut freed| std::mem::take(&mut *freed)).unwrap_or_default();
+        let freed = self
+            .freed
+            .lock()
+            .map(|mut freed| std::mem::take(&mut *freed))
+            .unwrap_or_default();
         for key in freed {
             if let Some(value) = self.slots[key].take() {
                 self.released.push(value);
@@ -158,7 +167,9 @@ impl StoreHandle {
 
     /// Runs PHP code from inside a host function, routing store access through `caller`.
     pub fn enter_host<R>(&self, caller: &mut Caller<'_, HostState>, f: impl FnOnce() -> R) -> R {
-        let previous = self.active.replace((caller as *mut Caller<'_, HostState>).cast());
+        let previous = self
+            .active
+            .replace((caller as *mut Caller<'_, HostState>).cast());
         let _restore = Restore(&self.active, previous);
         f()
     }
@@ -178,7 +189,10 @@ impl StoreHandle {
     }
 }
 
-struct Restore<'a>(&'a Cell<*mut Caller<'static, HostState>>, *mut Caller<'static, HostState>);
+struct Restore<'a>(
+    &'a Cell<*mut Caller<'static, HostState>>,
+    *mut Caller<'static, HostState>,
+);
 
 impl Drop for Restore<'_> {
     fn drop(&mut self) {

@@ -31,7 +31,12 @@ impl Tag {
             .values()
             .map(|ty| {
                 ty.str()
-                    .ok_or_else(|| type_error(format!("expected a value type name, got {}", debug_type(ty))))
+                    .ok_or_else(|| {
+                        type_error(format!(
+                            "expected a value type name, got {}",
+                            debug_type(ty)
+                        ))
+                    })
                     .and_then(parse_val_type)
             })
             .collect::<PhpResult<Vec<ValType>>>()?;
@@ -46,18 +51,35 @@ impl Tag {
 
 /// Returns the PHP object for `tag`, reusing the one PHP already knows so that
 /// tags compare with `===` as they do in JS.
-pub fn tag_to_zval(ctx: &mut StoreContextMut<'_, HostState>, tag: &wasmtime::Tag) -> Result<Zval, PhpException> {
-    if let Some(known) = ctx.data().tags.iter().find(|(known, _)| wasmtime::Tag::eq(known, tag, &*ctx)) {
+pub fn tag_to_zval(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    tag: &wasmtime::Tag,
+) -> Result<Zval, PhpException> {
+    if let Some(known) = ctx
+        .data()
+        .tags
+        .iter()
+        .find(|(known, _)| wasmtime::Tag::eq(known, tag, &*ctx))
+    {
         return Ok(known.1.shallow_clone());
     }
-    let object = Tag { store: store::current(), inner: *tag }.into_zval(false)?;
+    let object = Tag {
+        store: store::current(),
+        inner: *tag,
+    }
+    .into_zval(false)?;
     ctx.data_mut().tags.push((*tag, object.shallow_clone()));
     Ok(object)
 }
 
 /// Remembers the PHP object of a tag that PHP handed to wasm.
 pub fn remember_tag(ctx: &mut StoreContextMut<'_, HostState>, tag: &wasmtime::Tag, object: &Zval) {
-    if !ctx.data().tags.iter().any(|(known, _)| wasmtime::Tag::eq(known, tag, &*ctx)) {
+    if !ctx
+        .data()
+        .tags
+        .iter()
+        .any(|(known, _)| wasmtime::Tag::eq(known, tag, &*ctx))
+    {
         ctx.data_mut().tags.push((*tag, object.shallow_clone()));
     }
 }

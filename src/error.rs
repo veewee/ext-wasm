@@ -1,12 +1,12 @@
 use std::fmt::Display;
 use std::sync::Once;
 
+use ext_php_rs::class::RegisteredClass;
 use ext_php_rs::exception::PhpException;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::class::RegisteredClass;
 use ext_php_rs::types::Zval;
-use ext_php_rs::zend::{ce, ClassEntry};
+use ext_php_rs::zend::{ClassEntry, ce};
 
 #[php_class]
 #[php(name = "Wasm\\Exception\\WasmException")]
@@ -83,7 +83,9 @@ pub fn adopt_exception_behaviour() {
                 (*class).ce_flags &= !ClassFlags::NotSerializable.bits();
                 // Overwriting the function in place covers `new`, `parent::__construct()`
                 // and reflection, which all resolve to this same function entry.
-                let Some(ours) = (*class).constructor.as_mut() else { continue };
+                let Some(ours) = (*class).constructor.as_mut() else {
+                    continue;
+                };
                 if std::ptr::eq(class.cast_const(), crate::throw::class_entry()) {
                     // Keeps the declared (Tag $tag, array $payload) signature.
                     ours.internal_function.handler = Some(crate::throw::construct);

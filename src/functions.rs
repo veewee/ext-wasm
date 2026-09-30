@@ -32,9 +32,12 @@ pub fn instantiate(source: &Zval, imports: Option<&ZendHashTable>) -> PhpResult<
     if let Some(module) = downcast::<Module>(source) {
         return Ok(Instance::__construct(module, imports)?.into_zval(false)?);
     }
-    let bytes = source
-        .zend_str()
-        .ok_or_else(|| type_error(format!("expected string or Wasm\\Module, got {}", debug_type(source))))?;
+    let bytes = source.zend_str().ok_or_else(|| {
+        type_error(format!(
+            "expected string or Wasm\\Module, got {}",
+            debug_type(source)
+        ))
+    })?;
     let module = Module::compile(bytes.as_bytes())?;
     let instance = Instance::__construct(&module, imports)?;
     let mut result = ZendHashTable::new();
