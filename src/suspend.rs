@@ -6,8 +6,7 @@ use ext_php_rs::convert::{IntoZval, IntoZvalDyn};
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::{ZendCallable, ZendObject, Zval};
-use ext_php_rs::zend::ExecutorGlobals;
+use ext_php_rs::types::{ZendCallable, Zval};
 use wasmtime::{AsContextMut, Caller, FuncType, Val, ValType};
 
 use crate::callback::{FiberSwitchBlock, settle};
@@ -168,23 +167,18 @@ pub fn drive<R>(
             return result;
         }
         // Without a request wasmtime only yielded, for example inside its GC.
-        if let Some(request) = store.take_request()
-            && run(store, request) == Flow::Unwinding
-        {
-            return Err(wasmtime::Error::msg(
-                "the call was abandoned because PHP is unwinding",
-            ));
+        if let Some(request) = store.take_request() {
+            run(store, request);
         }
     }
 }
 
-#[derive(PartialEq)]
-enum Flow {
-    Resume,
-    Unwinding,
-}
-
-fn run(store: &StoreHandle, request: Request) -> Flow {
+/// Runs the callback of a parked call and leaves its outcome for the next poll.
+///
+/// When the callback leaves exit() or a destroyed Fiber's graceful exit
+/// pending, that poll fails the wasm call without running PHP, and the entry
+/// point's own error is not thrown over the pending one, so PHP keeps unwinding.
+fn run(store: &StoreHandle, request: Request) {
     let Request {
         caller,
         callable,
@@ -198,32 +192,12 @@ fn run(store: &StoreHandle, request: Request) -> Flow {
         let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
         ZendCallable::new(&callable).and_then(|callable| callable.try_call(args))
     };
-    let unwinding = is_unwinding();
     {
         // Releasing these can run PHP destructors, which may use wasm objects again.
         let _no_fiber_switch = block();
         drop((args, callable));
     }
-    if unwinding {
-        // exit() or a destroyed Fiber: no more PHP may run, and PHP's own
-        // exception must stay pending. ext-php-rs never throws over it.
-        return Flow::Unwinding;
-    }
     store.put_response(returned.map_err(|err| err.to_string()));
-    Flow::Resume
-}
-
-unsafe extern "C" {
-    fn zend_is_unwind_exit(ex: *const ZendObject) -> bool;
-    fn zend_is_graceful_exit(ex: *const ZendObject) -> bool;
-}
-
-fn is_unwinding() -> bool {
-    ExecutorGlobals::get().exception().is_some_and(|exception| {
-        let exception: *const ZendObject = exception;
-        // SAFETY: both only read the class of a live exception object.
-        unsafe { zend_is_unwind_exit(exception) || zend_is_graceful_exit(exception) }
-    })
 }
 
 struct ClearSlots<'a>(&'a StoreHandle);

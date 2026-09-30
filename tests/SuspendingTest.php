@@ -27,6 +27,14 @@ final class SuspendingTest extends TestCase
             (i32.add (call $later (local.get 0)) (i32.const 1))))
         EOWAT;
 
+    private const LATER_OR_NOW = <<<'EOWAT'
+        (module
+          (import "env" "later" (func $later (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            (i32.add (call $later (local.get 0)) (i32.const 1)))
+          (func (export "now") (param i32) (result i32) (local.get 0)))
+        EOWAT;
+
     public function test_a_suspending_import_suspends_and_resumes_its_fiber(): void
     {
         $exports = (new Instance(new Module(self::ADD_LATER), [
@@ -216,5 +224,150 @@ final class SuspendingTest extends TestCase
 
         self::assertSame(0, $exitCode, $output);
         self::assertSame('32,12,22', $output);
+    }
+
+    public function test_an_exception_thrown_after_resume_comes_back_out(): void
+    {
+        $thrown = new \DomainException('from php');
+        $exports = (new Instance(new Module(self::ADD_LATER), [
+            'env' => ['later' => new Suspending(function () use ($thrown): int {
+                \Fiber::suspend();
+                throw $thrown;
+            })],
+        ]))->exports;
+
+        $fiber = new \Fiber(fn (): int => $exports->run(1));
+        $fiber->start();
+
+        try {
+            $fiber->resume();
+            self::fail('Expected the callback exception to propagate');
+        } catch (\DomainException $caught) {
+            self::assertSame($thrown, $caught);
+        }
+    }
+
+    public function test_wasm_catches_a_wasm_throw_thrown_after_resume(): void
+    {
+        $tag = new \Wasm\Tag(['parameters' => ['i32']]);
+        $exports = (new Instance(new Module(<<<'EOWAT'
+            (module
+              (import "env" "e" (tag $e (param i32)))
+              (import "env" "fail" (func $fail))
+              (func (export "run") (result i32)
+                (block $caught (result i32)
+                  (try_table (catch $e $caught) (call $fail))
+                  (i32.const -1))
+                (i32.const 1)
+                (i32.add)))
+            EOWAT), ['env' => ['e' => $tag, 'fail' => new Suspending(function () use ($tag): void {
+            \Fiber::suspend();
+            throw new \Wasm\Exception\WasmThrow($tag, [41]);
+        })]]))->exports;
+
+        $fiber = new \Fiber(fn (): int => $exports->run());
+        $fiber->start();
+        $fiber->resume();
+
+        self::assertSame(42, $fiber->getReturn());
+    }
+
+    public function test_suspending_outside_a_fiber_is_a_fiber_error(): void
+    {
+        $exports = (new Instance(new Module(self::ADD_LATER), [
+            'env' => ['later' => new Suspending(fn (): int => \Fiber::suspend())],
+        ]))->exports;
+
+        $this->expectException(\FiberError::class);
+        $exports->run(1);
+    }
+
+    public function test_the_instance_stays_usable_after_a_failed_suspending_call(): void
+    {
+        $fail = true;
+        $exports = (new Instance(new Module(self::ADD_LATER), [
+            'env' => ['later' => new Suspending(function (int $n) use (&$fail): int {
+                if ($fail) {
+                    throw new \DomainException('once');
+                }
+
+                return $n;
+            })],
+        ]))->exports;
+
+        try {
+            $exports->run(1);
+            self::fail('Expected the callback exception to propagate');
+        } catch (\DomainException) {
+        }
+        $fail = false;
+
+        self::assertSame(3, $exports->run(2));
+    }
+
+    public function test_a_destroyed_suspended_fiber_unwinds_and_leaves_the_instance_usable(): void
+    {
+        $script = <<<'PHP'
+            <?php
+            $exports = (new Wasm\Instance(new Wasm\Module('%s'), [
+                'env' => ['later' => new Wasm\Suspending(function (int $n): int {
+                    try {
+                        return Fiber::suspend();
+                    } finally {
+                        echo "unwound\n";
+                    }
+                })],
+            ]))->exports;
+            $fiber = new Fiber(fn (): int => $exports->run(1));
+            $fiber->start();
+            unset($fiber);
+            echo $exports->now(1) === 1 ? "usable\n" : "broken\n";
+            PHP;
+
+        $output = $this->runPhp(sprintf($script, self::LATER_OR_NOW), $exitCode);
+
+        self::assertSame(0, $exitCode, $output);
+        self::assertSame("unwound\nusable", $output);
+    }
+
+    public function test_exit_inside_a_suspended_callback_exits_the_process(): void
+    {
+        $script = <<<'PHP'
+            <?php
+            $exports = (new Wasm\Instance(new Wasm\Module('%s'), [
+                'env' => ['later' => new Wasm\Suspending(function (): int {
+                    Fiber::suspend();
+                    echo "exiting\n";
+                    exit(3);
+                })],
+            ]))->exports;
+            $fiber = new Fiber(fn (): int => $exports->run(1));
+            $fiber->start();
+            $fiber->resume();
+            echo "not reached\n";
+            PHP;
+
+        $output = $this->runPhp(sprintf($script, self::ADD_LATER), $exitCode);
+
+        self::assertSame(3, $exitCode, $output);
+        self::assertSame('exiting', $output);
+    }
+
+    public function test_a_fiber_left_suspended_at_script_end_does_not_crash(): void
+    {
+        $script = <<<'PHP'
+            <?php
+            $exports = (new Wasm\Instance(new Wasm\Module('%s'), [
+                'env' => ['later' => new Wasm\Suspending(fn (): int => Fiber::suspend())],
+            ]))->exports;
+            $fiber = new Fiber(fn (): int => $exports->run(1));
+            $fiber->start();
+            echo "done";
+            PHP;
+
+        $output = $this->runPhp(sprintf($script, self::ADD_LATER), $exitCode);
+
+        self::assertSame(0, $exitCode, $output);
+        self::assertSame('done', $output);
     }
 }
