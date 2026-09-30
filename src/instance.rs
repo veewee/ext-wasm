@@ -5,7 +5,8 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::Extern;
 
-use crate::error::{link_error, runtime_error};
+use crate::error::link_error;
+use crate::throw::call_error;
 use crate::imports;
 use crate::exports::Exports;
 use crate::module::Module;
@@ -24,7 +25,13 @@ impl Instance {
         let store = store::current();
         let imports = imports::resolve(&store, &module.inner, imports)?;
         let externs: Vec<(String, Extern)> = store.with(|mut ctx| {
-            let instance = wasmtime::Instance::new(&mut ctx, &module.inner, &imports).map_err(instantiation_error)?;
+            let instance = match wasmtime::Instance::new(&mut ctx, &module.inner, &imports) {
+                Ok(instance) => instance,
+                Err(err) if err.is::<wasmtime::Trap>() || err.is::<wasmtime::ThrownException>() => {
+                    return Err(call_error(&mut ctx, err));
+                }
+                Err(err) => return Err(link_error(err)),
+            };
             Ok::<_, ext_php_rs::exception::PhpException>(
                 instance
                     .exports(&mut ctx)
@@ -40,9 +47,4 @@ impl Instance {
     pub fn get_exports(&self) -> Zval {
         self.exports.shallow_clone()
     }
-}
-
-/// Traps raised by the start function are runtime errors, everything else is a link error.
-fn instantiation_error(err: wasmtime::Error) -> ext_php_rs::exception::PhpException {
-    if err.is::<wasmtime::Trap>() { runtime_error(err) } else { link_error(err) }
 }

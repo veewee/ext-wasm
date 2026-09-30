@@ -249,6 +249,18 @@ namespace Wasm {
     }
 
     /**
+     * An exception tag, like JS `WebAssembly.Tag`.
+     */
+    class Tag {
+        /**
+         * @param array{parameters: list<string>} $descriptor
+         *
+         * @param array $descriptor
+         */
+        public function __construct(array $descriptor) {}
+    }
+
+    /**
      * @param string $bytes
      * @return \Wasm\Module
      */
@@ -310,5 +322,26 @@ namespace Wasm\Exception {
          * @param mixed $previous
          */
         public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
+    }
+
+    /**
+     * A wasm exception, like JS `WebAssembly.Exception`.
+     *
+     * Thrown in PHP when a wasm exception escapes to PHP, and thrown by a PHP
+     * callback to raise an exception that wasm code can catch.
+     *
+     * @property \Wasm\Tag $tag
+     * @property list<mixed> $payload
+     */
+    class WasmThrow extends \Wasm\Exception\WasmException {
+        public $payload = null;
+
+        public $tag = null;
+
+        /**
+         * @param \Wasm\Tag $tag
+         * @param array|null $payload
+         */
+        public function __construct(\Wasm\Tag $tag, ?array $payload = null) {}
     }
 }

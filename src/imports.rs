@@ -8,6 +8,7 @@ use crate::func::Func;
 use crate::global::{new_global, GlobalVar};
 use crate::memory::Memory;
 use crate::table::Table;
+use crate::tag::{remember_tag, Tag};
 use crate::store::SharedStore;
 use crate::value::{debug_type, downcast, to_val};
 
@@ -36,6 +37,10 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
     }
     if let Some(table) = downcast::<Table>(value) {
         return Ok(table.inner.into());
+    }
+    if let Some(tag) = downcast::<Tag>(value) {
+        store.with(|mut ctx| remember_tag(&mut ctx, &tag.inner, value));
+        return Ok(tag.inner.into());
     }
     if let Some(func) = downcast::<Func>(value) {
         return Ok(func.inner.into());

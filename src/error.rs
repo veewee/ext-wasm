@@ -33,7 +33,7 @@ pub struct LinkError;
 pub struct RuntimeError;
 
 // The explicit `ce` form is used so the generated stub gets a fully qualified parent name.
-fn wasm_exception_ce() -> &'static ClassEntry {
+pub fn wasm_exception_ce() -> &'static ClassEntry {
     WasmException::get_metadata().ce()
 }
 
@@ -67,11 +67,12 @@ pub fn adopt_exception_behaviour() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         let base: *const ClassEntry = ce::exception();
-        let classes: [*const ClassEntry; 4] = [
+        let classes: [*const ClassEntry; 5] = [
             WasmException::get_metadata().ce(),
             CompileError::get_metadata().ce(),
             LinkError::get_metadata().ce(),
             RuntimeError::get_metadata().ce(),
+            crate::throw::class_entry(),
         ];
         // SAFETY: internal class entries live for the whole process, no PHP code
         // has run yet in this request, and `ONCE` makes this the only writer.
@@ -82,7 +83,11 @@ pub fn adopt_exception_behaviour() {
                 (*class).ce_flags &= !ClassFlags::NotSerializable.bits();
                 // Overwriting the function in place covers `new`, `parent::__construct()`
                 // and reflection, which all resolve to this same function entry.
-                if let (Some(ours), Some(theirs)) = ((*class).constructor.as_mut(), (*base).constructor.as_ref()) {
+                let Some(ours) = (*class).constructor.as_mut() else { continue };
+                if std::ptr::eq(class.cast_const(), crate::throw::class_entry()) {
+                    // Keeps the declared (Tag $tag, array $payload) signature.
+                    ours.internal_function.handler = Some(crate::throw::construct);
+                } else if let Some(theirs) = (*base).constructor.as_ref() {
                     ours.internal_function = theirs.internal_function;
                 }
             }

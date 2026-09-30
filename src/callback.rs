@@ -3,6 +3,7 @@ use ext_php_rs::types::{ZendCallable, Zval};
 use wasmtime::{AsContextMut, Caller, FuncType, Val, ValType};
 
 use crate::store::{self, HostState};
+use crate::throw;
 use crate::value::{debug_type, from_val, to_val};
 
 /// Wraps a PHP callable as a wasm function of type `ty`.
@@ -33,7 +34,17 @@ fn invoke(
     });
     // A PHP exception stays pending in the engine while wasm unwinds, and the
     // PHP entry point that started the call rethrows it unchanged.
-    let returned = returned.map_err(|err| wasmtime::Error::msg(format!("PHP callback failed: {err}")))?;
+    let returned = match returned {
+        Ok(returned) => returned,
+        Err(err) => {
+            let mut ctx = caller.as_context_mut();
+            // A WasmThrow becomes a wasm exception that wasm code can catch.
+            if let Some(exception) = throw::take_pending(&mut ctx) {
+                return ctx.throw(exception?);
+            }
+            return Err(wasmtime::Error::msg(format!("PHP callback failed: {err}")));
+        }
+    };
 
     let mut ctx = caller.as_context_mut();
     match result_types {

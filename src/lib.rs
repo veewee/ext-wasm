@@ -13,6 +13,8 @@ mod memory;
 mod module;
 mod store;
 mod table;
+mod tag;
+mod throw;
 mod value;
 
 use ext_php_rs::prelude::*;
@@ -41,11 +43,13 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<error::CompileError>()
         .class::<error::LinkError>()
         .class::<error::RuntimeError>()
+        .class::<throw::WasmThrow>()
         .class::<module::Module>()
         .class::<func::Func>()
         .class::<global::GlobalVar>()
         .class::<memory::Memory>()
         .class::<table::Table>()
+        .class::<tag::Tag>()
         .class::<exports::Exports>()
         .class::<instance::Instance>()
 }

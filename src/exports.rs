@@ -11,6 +11,7 @@ use crate::func::{call, Func};
 use crate::global::GlobalVar;
 use crate::memory::Memory;
 use crate::table::Table;
+use crate::tag::tag_to_zval;
 use crate::store::SharedStore;
 
 /// The exports of an instance, like JS `instance.exports`.
@@ -93,6 +94,7 @@ fn wrap_extern(store: &SharedStore, ext: Extern) -> PhpResult<Zval> {
         Extern::Global(inner) => Ok(GlobalVar { store: store.clone(), inner }.into_zval(false)?),
         Extern::Memory(inner) => Ok(Memory { store: store.clone(), inner }.into_zval(false)?),
         Extern::Table(inner) => Ok(Table { store: store.clone(), inner }.into_zval(false)?),
+        Extern::Tag(inner) => store.with(|mut ctx| tag_to_zval(&mut ctx, &inner)),
         _ => Err(error("unsupported export kind")),
     }
 }

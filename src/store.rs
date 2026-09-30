@@ -10,6 +10,8 @@ use crate::engine::engine;
 #[derive(Default)]
 pub struct HostState {
     pub values: Values,
+    /// PHP objects of the tags PHP has seen, so a tag round trips by identity.
+    pub tags: Vec<(wasmtime::Tag, Zval)>,
 }
 
 /// PHP values referenced from wasm: callables behind host functions and
