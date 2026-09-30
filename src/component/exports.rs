@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use crate::component::func::Func;
 use crate::component::resource::{ResourceClass, ResourceMeta, is_resource_function};
+use crate::component::types::{Names, function_type};
 use crate::component::value::camel;
 use crate::engine::engine;
 use crate::error::error;
@@ -40,15 +41,24 @@ impl Exports {
         items: impl Iterator<Item = (&'a str, ComponentExtern<'a>)>,
     ) -> PhpResult<Self> {
         let items: Vec<(&str, ComponentExtern<'a>)> = items.collect();
+        let names = Names::of(items.iter().map(|(name, item)| (*name, item)));
         // Functions first: a resource type collects its constructor, static
         // functions and methods from them.
         let mut functions = Vec::new();
         for (name, item) in &items {
-            if let ComponentItem::ComponentFunc(_) = item.ty
+            if let ComponentItem::ComponentFunc(ty) = &item.ty
                 && let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name)
                 && let Some(inner) = instance.get_func(ctx.as_context_mut(), index)
             {
-                functions.push((name.to_string(), inner));
+                let signature = function_type(ty, &names)?.into_zval(false)?;
+                functions.push((
+                    name.to_string(),
+                    Func {
+                        store: store.clone(),
+                        inner,
+                        signature,
+                    },
+                ));
             }
         }
         let mut entries = Vec::new();
@@ -58,15 +68,11 @@ impl Exports {
                     if is_resource_function(name) {
                         continue;
                     }
-                    let Some((_, inner)) = functions.iter().find(|(export, _)| export == name)
+                    let Some((_, func)) = functions.iter().find(|(export, _)| export == name)
                     else {
                         continue;
                     };
-                    Func {
-                        store: store.clone(),
-                        inner: *inner,
-                    }
-                    .into_zval(false)?
+                    func.clone().into_zval(false)?
                 }
                 ComponentItem::ComponentInstance(nested) => {
                     let Some(index) = instance.get_export_index(ctx.as_context_mut(), parent, name)
@@ -83,7 +89,7 @@ impl Exports {
                     else {
                         continue;
                     };
-                    let meta = Rc::new(ResourceMeta::new(store, name, ty, &functions));
+                    let meta = Rc::new(ResourceMeta::new(name, ty, &functions));
                     store.resource_types.borrow_mut().push(meta.clone());
                     ResourceClass {
                         store: store.clone(),

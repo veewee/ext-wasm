@@ -36,7 +36,7 @@ final class ComponentTest extends TestCase
     {
         self::assertSame(
             [['name' => 'add', 'kind' => 'function', 'type' => 'func(a: u32, b: u32) -> u32']],
-            (new Component(self::ADDER))->exports(),
+            self::withoutSignatures((new Component(self::ADDER))->exports()),
         );
     }
 
@@ -49,7 +49,7 @@ final class ComponentTest extends TestCase
                 ]],
                 ['name' => 'now', 'kind' => 'function', 'type' => 'func() -> u64'],
             ],
-            (new Component(self::LOGGER))->imports(),
+            self::withoutSignatures((new Component(self::LOGGER))->imports()),
         );
     }
 
@@ -115,5 +115,23 @@ final class ComponentTest extends TestCase
     public function test_validate_accepts_components(): void
     {
         self::assertTrue(\Wasm\validate(self::ADDER));
+    }
+
+    /**
+     * The FunctionType objects of each entry, which ComponentTypeTest covers.
+     *
+     * @param list<array<string, mixed>> $entries
+     * @return list<array<string, mixed>>
+     */
+    private static function withoutSignatures(array $entries): array
+    {
+        return array_map(function (array $entry): array {
+            unset($entry['signature']);
+            if (isset($entry['functions'])) {
+                $entry['functions'] = self::withoutSignatures($entry['functions']);
+            }
+
+            return $entry;
+        }, $entries);
     }
 }

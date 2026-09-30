@@ -18,12 +18,32 @@ use crate::throw::call_error;
 pub struct Func {
     pub store: SharedStore,
     pub inner: wasmtime::component::Func,
+    /// The function's type, built from the component's own types when the
+    /// exports are, so it carries the names WIT gave them.
+    pub signature: Zval,
 }
 
 #[php_impl]
 impl Func {
     pub fn __invoke(&self, args: &[&Zval]) -> PhpResult<Zval> {
         self.call(args)
+    }
+
+    /// The function's WIT type.
+    ///
+    /// @return \Wasm\Component\Type\FunctionType
+    pub fn r#type(&self) -> Zval {
+        self.signature.shallow_clone()
+    }
+}
+
+impl Clone for Func {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            inner: self.inner,
+            signature: self.signature.shallow_clone(),
+        }
     }
 }
 

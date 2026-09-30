@@ -485,6 +485,13 @@ namespace Wasm\Component {
          * @return mixed
          */
         public function __invoke(mixed ...$args): mixed {}
+
+        /**
+         * The function's WIT type.
+         *
+         * @return \Wasm\Component\Type\FunctionType
+         */
+        public function type(): mixed {}
     }
 
     /**
@@ -637,6 +644,111 @@ namespace Wasm\Component {
          * @param mixed $value
          */
         public function __construct(string $tag, mixed $value = null) {}
+    }
+}
+
+namespace Wasm\Component\Type {
+    /**
+     * A WIT function type: its parameters by name and its result.
+     */
+    class FunctionType {
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType>
+         *
+         * @var mixed
+         */
+        public readonly mixed $params = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $result = null;
+
+        public function __construct() {}
+
+        /**
+         * The type as WIT, like `func(markdown: string) -> string`.
+         *
+         * @return string
+         */
+        public function __toString(): string {}
+    }
+
+    /**
+     * A WIT value type. `kind` is the WIT keyword; the other properties are set
+     * for the kinds they belong to and null otherwise.
+     */
+    class ValueType {
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType|null>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $cases = null;
+
+        /**
+         * The element of a list, or the value of an option.
+         *
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $element = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $err = null;
+
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $fields = null;
+
+        public readonly string $kind;
+
+        /**
+         * The name the component gives the type, if any.
+         *
+         * @var string|null
+         */
+        public readonly ?string $name = null;
+
+        /**
+         * @return list<string>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $names = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $ok = null;
+
+        /**
+         * The resource of an own or borrow handle.
+         *
+         * @var string|null
+         */
+        public readonly ?string $resource = null;
+
+        /**
+         * @return list<\Wasm\Component\Type\ValueType>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $types = null;
+
+        public function __construct() {}
     }
 }
 

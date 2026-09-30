@@ -8,10 +8,12 @@ pub mod http;
 pub mod imports;
 pub mod instance;
 pub mod resource;
+pub mod types;
 pub mod value;
 
 use ext_php_rs::binary_slice::BinarySlice;
 use ext_php_rs::boxed::ZBox;
+use ext_php_rs::convert::IntoZval;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
@@ -21,6 +23,7 @@ use wasmtime::component::types::{ComponentExtern, ComponentFunc, ComponentItem, 
 use crate::engine::{compile_in_process_pool, engine};
 use crate::error::compile_error;
 use crate::module::read_local_file;
+use types::Names;
 
 /// A compiled WebAssembly component.
 ///
@@ -84,20 +87,26 @@ pub fn validate(binary: &[u8]) -> bool {
 fn describe_all<'a>(
     items: impl Iterator<Item = (&'a str, ComponentExtern<'a>)>,
 ) -> PhpResult<ZBox<ZendHashTable>> {
+    let items: Vec<(&str, ComponentExtern<'a>)> = items.collect();
+    let names = Names::of(items.iter().map(|(name, item)| (*name, item)));
     let mut list = ZendHashTable::new();
-    for (name, item) in items {
-        list.push(describe(name, &item.ty)?)?;
+    for (name, item) in &items {
+        list.push(describe(name, &item.ty, &names)?)?;
     }
     Ok(list)
 }
 
-fn describe(name: &str, item: &ComponentItem) -> PhpResult<ZBox<ZendHashTable>> {
+fn describe(name: &str, item: &ComponentItem, names: &Names) -> PhpResult<ZBox<ZendHashTable>> {
     let mut entry = ZendHashTable::new();
     entry.insert("name", name)?;
     match item {
         ComponentItem::ComponentFunc(func) => {
             entry.insert("kind", "function")?;
-            entry.insert("type", wit_signature(func))?;
+            entry.insert("type", wit_signature(func, names))?;
+            entry.insert(
+                "signature",
+                types::function_type(func, names)?.into_zval(false)?,
+            )?;
         }
         ComponentItem::ComponentInstance(instance) => {
             entry.insert("kind", "instance")?;
@@ -112,23 +121,32 @@ fn describe(name: &str, item: &ComponentItem) -> PhpResult<ZBox<ZendHashTable>> 
     Ok(entry)
 }
 
-/// A function type as WIT text, like `func(a: u32) -> string`.
-///
-/// wasmtime's types are structural, so named WIT types print as their structure.
-pub fn wit_signature(func: &ComponentFunc) -> String {
+/// A function type as WIT text, like `func(a: u32) -> string`, with the
+/// names the scope gives its types.
+pub fn wit_signature(func: &ComponentFunc, names: &Names) -> String {
     let params: Vec<String> = func
         .params()
-        .map(|(name, ty)| format!("{name}: {}", wit_type(&ty)))
+        .map(|(name, ty)| format!("{name}: {}", wit_named(&ty, names)))
         .collect();
     let mut signature = format!("func({})", params.join(", "));
-    let results: Vec<String> = func.results().map(|ty| wit_type(&ty)).collect();
+    let results: Vec<String> = func.results().map(|ty| wit_named(&ty, names)).collect();
     if !results.is_empty() {
         signature.push_str(&format!(" -> {}", results.join(", ")));
     }
     signature
 }
 
+/// A type as WIT text, spelling out its structure.
 pub fn wit_type(ty: &Type) -> String {
+    wit_named(ty, &Names::default())
+}
+
+/// A type as WIT text, using the names in `names` where it has one.
+pub fn wit_named(ty: &Type, names: &Names) -> String {
+    if let Some(name) = names.type_name(ty) {
+        return name.to_string();
+    }
+    let wit_type = |ty: &Type| wit_named(ty, names);
     let list = |types: Vec<String>| types.join(", ");
     match ty {
         Type::Bool => "bool".into(),
@@ -189,8 +207,14 @@ pub fn wit_type(ty: &Type) -> String {
             (None, Some(err)) => format!("result<_, {}>", wit_type(&err)),
             (Some(ok), Some(err)) => format!("result<{}, {}>", wit_type(&ok), wit_type(&err)),
         },
-        Type::Own(_) => "own<resource>".into(),
-        Type::Borrow(_) => "borrow<resource>".into(),
+        Type::Own(resource) => format!(
+            "own<{}>",
+            names.resource_name(resource).unwrap_or("resource")
+        ),
+        Type::Borrow(resource) => format!(
+            "borrow<{}>",
+            names.resource_name(resource).unwrap_or("resource")
+        ),
         Type::Future(inner) => match inner.ty() {
             Some(ty) => format!("future<{}>", wit_type(&ty)),
             None => "future".into(),

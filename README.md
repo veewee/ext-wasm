@@ -179,7 +179,7 @@ $instance->exports->get('docs:markdown/render')->render('**hi**');   // an expor
 $instance->exports->renderHtml('**hi**');                            // a function the world exports
 ```
 
-`exports()` and `imports()` list every function with its WIT signature, such as `func(markdown: string) -> string`. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
+`exports()` and `imports()` list every function with its WIT signature as text, such as `func(markdown: string) -> string`, and as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too. Its `params` and `result` are `Wasm\Component\Type\ValueType` objects: `kind` is the WIT keyword (`u32`, `record`, `own`, ...), and `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds. A record, variant, enum or flags type that the component names carries that `name`, unless two names fit the same shape or the type holds a resource. This can be used, for example, to generate PHP stubs for a component. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
 
 | WIT | PHP |
 |---|---|

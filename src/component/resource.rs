@@ -29,16 +29,8 @@ pub struct ResourceMeta {
 impl ResourceMeta {
     /// Groups the `[constructor]name`, `[static]name.x` and `[method]name.x`
     /// functions of an interface under the resource `name`.
-    pub fn new(
-        store: &SharedStore,
-        name: &str,
-        ty: ResourceType,
-        functions: &[(String, wasmtime::component::Func)],
-    ) -> Self {
-        let func = |inner: &wasmtime::component::Func| Func {
-            store: store.clone(),
-            inner: *inner,
-        };
+    pub fn new(name: &str, ty: ResourceType, functions: &[(String, Func)]) -> Self {
+        let func = |function: &Func| function.clone();
         let constructor_name = format!("[constructor]{name}");
         let static_prefix = format!("[static]{name}.");
         let method_prefix = format!("[method]{name}.");
