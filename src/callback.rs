@@ -30,7 +30,7 @@ fn invoke(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let store = store::current();
+    let store = store::of(caller);
     let callable = caller.data().values.get(key).shallow_clone();
     let args = {
         let mut ctx = caller.as_context_mut();

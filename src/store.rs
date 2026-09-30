@@ -3,7 +3,7 @@ use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
 
 use ext_php_rs::types::Zval;
-use wasmtime::{AsContextMut, Caller, RootScope, Store, StoreContextMut};
+use wasmtime::{AsContext, AsContextMut, Caller, RootScope, Store, StoreContextMut};
 
 use crate::engine::engine;
 
@@ -12,6 +12,8 @@ pub struct HostState {
     pub values: Values,
     /// The PHP objects of tags PHP has seen, so a tag round trips by identity.
     pub tags: Vec<KnownTag>,
+    /// The handle that owns this store. Weak, because the handle owns the store.
+    handle: Weak<StoreHandle>,
 }
 
 /// A tag's PHP object, held without a reference.
@@ -136,18 +138,39 @@ thread_local! {
 
 pub type SharedStore = Rc<StoreHandle>;
 
+/// Creates a store of its own.
+pub fn new() -> SharedStore {
+    Rc::new_cyclic(|handle| StoreHandle {
+        store: RefCell::new(Store::new(
+            engine(),
+            HostState {
+                handle: handle.clone(),
+                ..HostState::default()
+            },
+        )),
+        active: Cell::new(std::ptr::null_mut()),
+    })
+}
+
 pub fn current() -> SharedStore {
     CURRENT.with(|current| {
         if let Some(handle) = current.borrow().upgrade() {
             return handle;
         }
-        let handle = Rc::new(StoreHandle {
-            store: RefCell::new(Store::new(engine(), HostState::default())),
-            active: Cell::new(std::ptr::null_mut()),
-        });
+        let handle = new();
         *current.borrow_mut() = Rc::downgrade(&handle);
         handle
     })
+}
+
+/// The handle of the store `ctx` belongs to.
+pub fn of(ctx: &impl AsContext<Data = HostState>) -> SharedStore {
+    ctx.as_context()
+        .data()
+        .handle
+        .upgrade()
+        // Wasm code and conversions only run while some wrapper holds the handle.
+        .expect("a store in use has a live handle")
 }
 
 const MIN_GC_THRESHOLD: usize = 1024;

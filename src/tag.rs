@@ -78,7 +78,7 @@ pub fn tag_to_zval(
     }
     let alive = Rc::new(Cell::new(true));
     let object = Tag {
-        store: store::current(),
+        store: store::of(ctx),
         inner: *tag,
         alive: alive.clone(),
     }

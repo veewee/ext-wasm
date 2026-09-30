@@ -131,7 +131,7 @@ pub fn from_ref(
     match value {
         Ref::Func(None) | Ref::Extern(None) => Ok(Zval::null()),
         Ref::Func(Some(inner)) => Func {
-            store: store::current(),
+            store: store::of(ctx),
             inner: *inner,
         }
         .into_zval(false)
