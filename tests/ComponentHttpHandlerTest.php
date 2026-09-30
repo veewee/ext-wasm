@@ -10,6 +10,7 @@ use Wasm\Component\Http\Request;
 use Wasm\Component\Http\Response;
 use Wasm\Component\Instance;
 use Wasm\Exception\RuntimeError;
+use Wasm\Suspending;
 use Wasm\Wasi;
 
 /**
@@ -27,6 +28,50 @@ final class ComponentHttpHandlerTest extends TestCase
         self::$component ??= Component::fromFile(self::HANDLER);
 
         return new Instance(self::$component, wasi: new Wasi(httpHosts: []));
+    }
+
+    /** A handler whose answer is what `later(1)` returns. */
+    private static function asyncHandler(Suspending $later): Instance
+    {
+        return new Instance(
+            Component::fromFile(__DIR__ . '/fixtures/component-http-handler-async/component-http-handler-async.wasm'),
+            ['later' => $later],
+            new Wasi(httpHosts: []),
+        );
+    }
+
+    public function test_an_async_instance_answers_after_its_fiber_resumes(): void
+    {
+        $handler = self::asyncHandler(new Suspending(fn (int $n): int => \Fiber::suspend('waiting') + $n));
+
+        $fiber = new \Fiber(fn (): Response => $handler->handle(new Request('GET', 'http://localhost/')));
+        self::assertSame('waiting', $fiber->start());
+        $fiber->resume(41);
+
+        self::assertSame('42', $fiber->getReturn()->body);
+    }
+
+    public function test_an_async_instance_answers_without_suspending(): void
+    {
+        $handler = self::asyncHandler(new Suspending(fn (int $n): int => $n * 10));
+
+        self::assertSame('10', $handler->handle(new Request('GET', 'http://localhost/'))->body);
+    }
+
+    public function test_a_parked_async_instance_refuses_another_request(): void
+    {
+        $handler = self::asyncHandler(new Suspending(fn (int $n): int => \Fiber::suspend() + $n));
+        $fiber = new \Fiber(fn (): Response => $handler->handle(new Request('GET', 'http://localhost/')));
+        $fiber->start();
+
+        try {
+            $handler->handle(new Request('GET', 'http://localhost/'));
+            self::fail('a parked instance took another request');
+        } catch (RuntimeError $e) {
+            self::assertStringContainsString('the store is busy with a suspended call', $e->getMessage());
+        }
+        $fiber->resume(1);
+        self::assertSame('2', $fiber->getReturn()->body);
     }
 
     public function test_the_component_answers_a_request(): void

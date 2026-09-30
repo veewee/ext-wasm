@@ -17,3 +17,4 @@ tools/*.phar binary
 /tests/fixtures/component-http/target/
 /tests/fixtures/component-resources/*/target/
 /tests/fixtures/component-http-handler/target/
+/tests/fixtures/component-http-handler-async/target/
