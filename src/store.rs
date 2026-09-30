@@ -225,7 +225,7 @@ pub type SharedStore = Rc<StoreHandle>;
 /// What a running host function received from wasmtime: a core function gets
 /// a `Caller`, a component function a `StoreContextMut`.
 #[derive(Clone, Copy)]
-enum Active {
+pub enum Active {
     None,
     Core(*mut Caller<'static, HostState>),
     Component(*mut StoreContextMut<'static, HostState>),
@@ -422,10 +422,19 @@ impl StoreHandle {
                 return;
             }
             let mut store = self.store.borrow_mut();
+            let is_async = store.data().is_async;
             for handle in pending {
                 // A handle of an instance that trapped cannot be dropped; the
                 // store frees it together with the instance.
-                let _ = handle.resource_drop(&mut *store);
+                if is_async {
+                    // This runs from PHP destructors, even during garbage
+                    // collection, where the component's destructor must not
+                    // suspend the Fiber.
+                    let _no_fiber_switch = crate::callback::FiberSwitchBlock::new();
+                    let _ = crate::suspend::drive(self, handle.resource_drop_async(&mut *store));
+                } else {
+                    let _ = handle.resource_drop(&mut *store);
+                }
             }
         }
     }
@@ -455,8 +464,8 @@ impl StoreHandle {
 
     /// Routes store access through the caller of a parked async call until
     /// the guard drops.
-    pub fn park(&self, caller: *mut Caller<'static, HostState>) -> Parked<'_> {
-        let previous = self.active.replace(Active::Core(caller));
+    pub fn park(&self, access: Active) -> Parked<'_> {
+        let previous = self.active.replace(access);
         self.parked.set(true);
         Parked(self, previous)
     }

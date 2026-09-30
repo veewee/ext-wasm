@@ -243,6 +243,8 @@ $instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::
 
 `[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each method and static function the resource declares, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
 
+A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface, and then suspends its Fiber as core imports do (see [Async imports](#async-imports)). Every other PHP import of that instance still blocks Fiber switches, and while a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call". Resource constructors and methods implemented by PHP classes cannot suspend.
+
 Components cannot be combined with core objects: a component instance has a store of its own. A resource that one component instance exports cannot be passed to another instance yet, which is a `TypeError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.

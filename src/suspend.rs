@@ -10,8 +10,9 @@ use ext_php_rs::types::{ZendCallable, Zval};
 use wasmtime::{AsContextMut, Caller, FuncType, Val, ValType};
 
 use crate::callback::{FiberSwitchBlock, settle};
+use crate::component::imports::{Target, call_target};
 use crate::error::type_error;
-use crate::store::{self, HostState, StoreHandle};
+use crate::store::{self, Active, HostState, StoreHandle};
 use crate::value::{debug_type, from_val};
 
 /// Marks a function import that may suspend the calling Fiber, like JS
@@ -44,10 +45,19 @@ impl Suspending {
 
 /// A PHP callback that wasm is waiting for.
 pub struct Request {
-    caller: *mut Caller<'static, HostState>,
-    callable: Zval,
-    args: Vec<Zval>,
-    suspending: bool,
+    /// The store access of the waiting call, for PHP code the callback runs.
+    pub access: Active,
+    pub callee: Callee,
+    pub args: Vec<Zval>,
+    pub suspending: bool,
+}
+
+/// What a waiting call asks PHP to run.
+pub enum Callee {
+    /// A core import.
+    Callable(Zval),
+    /// A component import: a callable or a method of a resource's PHP class.
+    Component(Target, Zval),
 }
 
 /// What the callback returned, or the message of its failure. An exception
@@ -117,8 +127,8 @@ impl Future for HostCall<'_> {
             let callable = ctx.data().values.get(this.key).shallow_clone();
             store.put_request(Request {
                 // The future is pinned inside wasmtime, so this address holds until it is dropped.
-                caller: (&mut this.caller as *mut Caller<'_, HostState>).cast(),
-                callable,
+                access: Active::Core((&mut this.caller as *mut Caller<'_, HostState>).cast()),
+                callee: Callee::Callable(callable),
                 args,
                 suspending: this.suspending,
             });
@@ -186,12 +196,12 @@ pub fn drive<R>(
 /// point's own error is not thrown over the pending one, so PHP keeps unwinding.
 fn call_parked(store: &StoreHandle, request: Request) {
     let Request {
-        caller,
-        callable,
+        access,
+        callee,
         args,
         suspending,
     } = request;
-    let _parked = store.park(caller);
+    let _parked = store.park(access);
     let block = || (!suspending).then(FiberSwitchBlock::new);
     {
         // What the previous callback returned. Releasing it can run PHP
@@ -201,13 +211,19 @@ fn call_parked(store: &StoreHandle, request: Request) {
     }
     let returned = {
         let _no_fiber_switch = block();
-        let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
-        ZendCallable::new(&callable).and_then(|callable| callable.try_call(args))
+        match &callee {
+            Callee::Callable(callable) => {
+                let args: Vec<&dyn IntoZvalDyn> =
+                    args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
+                ZendCallable::new(callable).and_then(|callable| callable.try_call(args))
+            }
+            Callee::Component(target, callable) => call_target(target, callable, &args),
+        }
     };
     {
         // Releasing these can run PHP destructors, which may use wasm objects again.
         let _no_fiber_switch = block();
-        drop((args, callable));
+        drop((args, callee));
     }
     store.put_response(returned.map_err(|err| err.to_string()));
 }

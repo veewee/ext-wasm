@@ -12,6 +12,7 @@ use crate::component::imports;
 use crate::engine::engine;
 use crate::error::{error, link_error};
 use crate::store::{self, HostState, SharedStore};
+use crate::suspend;
 use crate::throw::call_error;
 use crate::value::downcast;
 use crate::wasi::Wasi;
@@ -35,6 +36,10 @@ impl Instance {
         wasi: Option<&Wasi>,
     ) -> PhpResult<Self> {
         let store = store::new();
+        if imports::has_suspending(component, imports) {
+            // Decided before linking: every PHP import of such an instance is async.
+            store.with(|mut ctx| ctx.data_mut().is_async = true);
+        }
         let mut linker: Linker<HostState> = Linker::new(engine());
         imports::link(&store, &mut linker, component, imports)?;
         if let Some(wasi) = wasi {
@@ -50,7 +55,12 @@ impl Instance {
             wasi.attach(&store)?;
         }
         let exports = store.with(|mut ctx| {
-            let instance = match linker.instantiate(&mut ctx, &component.inner) {
+            let instantiated = if ctx.data().is_async {
+                suspend::drive(&store, linker.instantiate_async(&mut ctx, &component.inner))
+            } else {
+                linker.instantiate(&mut ctx, &component.inner)
+            };
+            let instance = match instantiated {
                 Ok(instance) => instance,
                 Err(err) if err.is::<wasmtime::Trap>() => return Err(call_error(&mut ctx, err)),
                 Err(err) => return Err(link_error(err)),
@@ -72,6 +82,9 @@ impl Instance {
     /// Hands `request` to the component's `wasi:http/incoming-handler` and
     /// returns its response.
     pub fn handle(&self, request: &Request) -> PhpResult<Response> {
+        if self.store.is_parked() {
+            return Err(store::busy());
+        }
         let handler = self
             .func("wasi:http/incoming-handler", "handle")
             .ok_or_else(|| error("the component does not export wasi:http/incoming-handler"))?;

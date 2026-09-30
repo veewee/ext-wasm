@@ -264,7 +264,7 @@ impl Wasi {
         self.used.set(true);
         let code = store.with(|mut ctx| {
             let mut results = [Val::Bool(false)];
-            match run.call(&mut ctx, &[], &mut results) {
+            match crate::component::func::run(&store, &mut ctx, run, &[], &mut results) {
                 Ok(()) => Ok(match results[0] {
                     Val::Result(Ok(_)) => 0,
                     _ => 1,

@@ -225,8 +225,10 @@ pub fn handle(
                 .to_bytes();
             Ok((parts, body))
         });
-        if let Err(err) = handler.call(
+        if let Err(err) = crate::component::func::run(
+            store,
             &mut ctx,
+            handler,
             &[Val::Resource(incoming), Val::Resource(outparam)],
             &mut [],
         ) {

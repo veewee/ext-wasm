@@ -55,6 +55,9 @@ impl Func {
     /// Calls with `first` as the first parameter, the handle of a resource
     /// method's `self`, and `args` for the rest.
     pub fn call_with_self(&self, first: Option<Val>, args: &[&Zval]) -> PhpResult<Zval> {
+        if self.store.is_parked() {
+            return Err(crate::store::busy());
+        }
         self.store.with(|mut ctx| {
             let ty = self.inner.ty(&ctx);
             let params: Vec<_> = ty
@@ -80,8 +83,7 @@ impl Func {
                 Ok(converted) => {
                     let params: Vec<Val> = first.into_iter().chain(converted).collect();
                     let mut results = vec![Val::Bool(false); ty.results().len()];
-                    self.inner
-                        .call(&mut ctx, &params, &mut results)
+                    run(&self.store, &mut ctx, self.inner, &params, &mut results)
                         .map(|()| results)
                         .map_err(|err| call_error(&mut ctx, err))
                 }
@@ -102,5 +104,20 @@ impl Func {
                 _ => Ok(Zval::null()),
             }
         })
+    }
+}
+
+/// Calls `func`, through `suspend::drive` when the store is async.
+pub fn run(
+    store: &crate::store::StoreHandle,
+    ctx: &mut wasmtime::StoreContextMut<'_, crate::store::HostState>,
+    func: wasmtime::component::Func,
+    params: &[Val],
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
+    if ctx.data().is_async {
+        crate::suspend::drive(store, func.call_async(&mut *ctx, params, results))
+    } else {
+        func.call(&mut *ctx, params, results)
     }
 }

@@ -19,7 +19,8 @@ use crate::component::value::{ResultValue, camel, from_val, to_val};
 use crate::component::wit_type;
 use crate::engine::engine;
 use crate::error::link_error;
-use crate::store::{self, HostState, SharedStore};
+use crate::store::{self, Active, HostState, SharedStore};
+use crate::suspend::{Callee, Request, Suspending};
 use crate::value::{debug_type, downcast};
 
 /// Defines every import of `component` that is not WASI from `imports`, the
@@ -30,6 +31,7 @@ pub fn link(
     component: &Component,
     imports: Option<&ZendHashTable>,
 ) -> PhpResult<()> {
+    let is_async = store.with(|ctx| ctx.data().is_async);
     for (name, item) in component.inner.component_type().imports(engine()) {
         if name.starts_with("wasi:") {
             continue;
@@ -58,7 +60,7 @@ pub fn link(
         match &item.ty {
             ComponentItem::ComponentFunc(ty) => {
                 let target = callable_target(store, value, name)?;
-                define(&mut linker.root(), name, name, ty, target)?;
+                define(&mut linker.root(), name, name, ty, target, is_async)?;
             }
             ComponentItem::ComponentInstance(instance) => {
                 let functions = value.array().ok_or_else(|| {
@@ -111,7 +113,7 @@ pub fn link(
                             .ok_or_else(|| link_error(format!("missing import \"{path}\"")))?;
                         callable_target(store, callable, &path)?
                     };
-                    define(&mut target, export, &path, ty, target_fn)?;
+                    define(&mut target, export, &path, ty, target_fn, is_async)?;
                 }
             }
             _ => return Err(unsupported_import(name)),
@@ -128,9 +130,10 @@ fn unsupported_import(name: &str) -> ext_php_rs::exception::PhpException {
 
 /// What a component import runs in PHP.
 #[derive(Clone)]
-enum Target {
-    /// A callable, by its key in the store's values.
-    Callable(usize),
+pub enum Target {
+    /// A callable, by its key in the store's values, and whether it was
+    /// given as a `Wasm\Suspending`, which may switch Fibers.
+    Callable(usize, bool),
     /// `new Class(...)` for `[constructor]resource`.
     Constructor(String),
     /// An instance method for `[method]resource.name`; the first argument is the object.
@@ -140,6 +143,14 @@ enum Target {
 }
 
 fn callable_target(store: &SharedStore, value: &Zval, path: &str) -> PhpResult<Target> {
+    if let Some(suspending) = downcast::<Suspending>(value) {
+        let key = store.with(|mut ctx| {
+            ctx.data_mut()
+                .values
+                .insert_permanent(suspending.callback.shallow_clone())
+        });
+        return Ok(Target::Callable(key, true));
+    }
     if downcast::<crate::func::Func>(value).is_some() || !value.is_callable() {
         return Err(link_error(format!(
             "import \"{path}\" expects a PHP callable, got {}",
@@ -151,7 +162,7 @@ fn callable_target(store: &SharedStore, value: &Zval, path: &str) -> PhpResult<T
             .values
             .insert_permanent(value.shallow_clone())
     });
-    Ok(Target::Callable(key))
+    Ok(Target::Callable(key, false))
 }
 
 /// The destructor of a host resource: the component dropped its handle. The
@@ -247,6 +258,7 @@ fn define(
     path: &str,
     ty: &ComponentFunc,
     what: Target,
+    is_async: bool,
 ) -> PhpResult<()> {
     if let Some(unsupported) = ty
         .params()
@@ -257,6 +269,22 @@ fn define(
         return Err(link_error(format!(
             "import \"{path}\" uses {unsupported}, which is not supported yet"
         )));
+    }
+    if is_async {
+        // PHP code cannot run on wasmtime's async stack, so the call is handed
+        // to the poll loop on the PHP stack, as for core Suspending imports.
+        return target
+            .func_new_async(name, move |ctx, ty, params, results| {
+                Box::new(ComponentHostCall {
+                    ctx,
+                    ty,
+                    params,
+                    results,
+                    what: what.clone(),
+                    requested: false,
+                })
+            })
+            .map_err(link_error);
     }
     target
         .func_new(name, move |mut ctx, ty, params, results| {
@@ -292,22 +320,62 @@ fn invoke(
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
     let store = store::of(ctx);
-    let callable = match what {
-        Target::Callable(key) => ctx.data().values.get(*key).shallow_clone(),
-        _ => Zval::null(),
-    };
-    let args = params
-        .iter()
-        .zip(ty.params())
-        .map(|(param, (_, ty))| from_val(ctx, param, &ty))
-        .collect::<Result<Vec<Zval>, _>>()?;
-
+    let callable = callable_of(ctx, what);
+    let args = lift(ctx, &store, ty, params)?;
     let returned = store.enter_component(ctx, || {
         let _no_fiber_switch = FiberSwitchBlock::new();
         call_target(what, &callable, &args)
     });
+    let (outcome, leftovers) = settle(ctx, returned.map_err(|err| err.to_string()), ty, results);
+    // Releasing these can run PHP destructors, which may use wasm objects again.
+    store.enter_component(ctx, move || {
+        let _no_fiber_switch = FiberSwitchBlock::new();
+        drop((leftovers, args, callable));
+    });
+    outcome
+}
 
-    let mut thrown = None;
+fn callable_of(ctx: &StoreContextMut<'_, HostState>, what: &Target) -> Zval {
+    match what {
+        Target::Callable(key, _) => ctx.data().values.get(*key).shallow_clone(),
+        _ => Zval::null(),
+    }
+}
+
+/// The parameters of an import call as PHP values.
+fn lift(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    store: &SharedStore,
+    ty: &ComponentFunc,
+    params: &[Val],
+) -> wasmtime::Result<Vec<Zval>> {
+    let mut args = Vec::with_capacity(params.len());
+    for (param, (_, param_ty)) in params.iter().zip(ty.params()) {
+        match from_val(ctx, param, &param_ty) {
+            Ok(arg) => args.push(arg),
+            Err(err) => {
+                // Resources lifted so far are PHP objects now; they are
+                // released where their destructors may run.
+                for arg in args {
+                    store.put_garbage(arg);
+                }
+                return Err(err.into());
+            }
+        }
+    }
+    Ok(args)
+}
+
+/// Gives the component what the PHP call returned or threw, and hands back
+/// the PHP values the caller must release.
+fn settle(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    returned: Result<Zval, String>,
+    ty: &ComponentFunc,
+    results: &mut [Val],
+) -> (wasmtime::Result<()>, Vec<Zval>) {
+    let store = store::of(ctx);
+    let mut leftovers = Vec::new();
     let lent = host_resource::mark(ctx);
     let moves = resource::moves_mark(ctx);
     let outcome = match (&returned, ty.results().next()) {
@@ -332,7 +400,10 @@ fn invoke(
             let outcome = ok_payload(ctx, &payload, result.err())
                 .map(|payload| results[0] = Val::Result(Err(payload)))
                 .map_err(Into::into);
-            thrown = Some((error, payload));
+            leftovers.push(payload);
+            if let Ok(error) = error.into_zval(false) {
+                leftovers.push(error);
+            }
             outcome
         }
         // Any other PHP exception stays pending in the engine while the
@@ -340,7 +411,6 @@ fn invoke(
         // rethrows it.
         (Err(err), _) => Err(wasmtime::Error::msg(format!("PHP callback failed: {err}"))),
     };
-
     // The component receives the converted result when this returns Ok.
     resource::finish_moves(ctx, moves, outcome.is_ok());
     let mut released = Vec::new();
@@ -348,18 +418,98 @@ fn invoke(
     for object in released {
         store.put_garbage(object);
     }
-
-    // Releasing these can run PHP destructors, which may use wasm objects again.
-    store.enter_component(ctx, move || {
-        let _no_fiber_switch = FiberSwitchBlock::new();
-        drop((returned, args, callable, thrown));
-    });
-    outcome
+    if let Ok(value) = returned {
+        leftovers.push(value);
+    }
+    (outcome, leftovers)
 }
 
-fn call_target(what: &Target, callable: &Zval, args: &[Zval]) -> ext_php_rs::error::Result<Zval> {
+/// A component import call in an async store. It lifts the parameters, asks
+/// `suspend::drive` to run the PHP call on the PHP stack, and settles the
+/// result when polled again.
+struct ComponentHostCall<'a> {
+    ctx: StoreContextMut<'a, HostState>,
+    ty: ComponentFunc,
+    params: &'a [Val],
+    results: &'a mut [Val],
+    what: Target,
+    requested: bool,
+}
+
+impl std::future::Future for ComponentHostCall<'_> {
+    type Output = wasmtime::Result<()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        use std::task::Poll;
+
+        let this = self.get_mut();
+        let store = store::of(&this.ctx);
+        if !this.requested {
+            let callable = callable_of(&this.ctx, &this.what);
+            let args = match lift(&mut this.ctx, &store, &this.ty, this.params) {
+                Ok(args) => args,
+                Err(err) => return Poll::Ready(Err(err)),
+            };
+            store.put_request(Request {
+                // The future is pinned inside wasmtime, so this address holds until it is dropped.
+                access: Active::Component(
+                    (&mut this.ctx as *mut StoreContextMut<'_, HostState>).cast(),
+                ),
+                suspending: matches!(this.what, Target::Callable(_, true)),
+                callee: Callee::Component(this.what.clone(), callable),
+                args,
+            });
+            this.requested = true;
+            return Poll::Pending;
+        }
+        let Some(returned) = store.take_response() else {
+            return Poll::Ready(Err(wasmtime::Error::msg(
+                "the component resumed a PHP call that has not returned",
+            )));
+        };
+        let (outcome, leftovers) = settle(&mut this.ctx, returned, &this.ty, this.results);
+        for value in leftovers {
+            store.put_garbage(value);
+        }
+        Poll::Ready(outcome)
+    }
+}
+
+/// Whether any import is a `Wasm\Suspending`, at the world level or inside
+/// an imported interface. Checked before linking, since every PHP import of
+/// such an instance is async.
+pub fn has_suspending(component: &Component, imports: Option<&ZendHashTable>) -> bool {
+    let Some(imports) = imports else {
+        return false;
+    };
+    component
+        .inner
+        .component_type()
+        .imports(engine())
+        .any(|(name, _)| {
+            let unversioned = name.split('@').next().unwrap_or(name);
+            let Some(value) = imports.get(name).or_else(|| imports.get(unversioned)) else {
+                return false;
+            };
+            downcast::<Suspending>(value).is_some()
+                || value.array().is_some_and(|functions| {
+                    functions
+                        .values()
+                        .any(|value| downcast::<Suspending>(value).is_some())
+                })
+        })
+}
+
+pub fn call_target(
+    what: &Target,
+    callable: &Zval,
+    args: &[Zval],
+) -> ext_php_rs::error::Result<Zval> {
     match what {
-        Target::Callable(_) => ZendCallable::new(callable)?.try_call(dyn_args(args)),
+        Target::Callable(..) => ZendCallable::new(callable)?.try_call(dyn_args(args)),
         Target::Static(name) => ZendCallable::try_from_name(name)?.try_call(dyn_args(args)),
         Target::Constructor(class) => {
             let class =
