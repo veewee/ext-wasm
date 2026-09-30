@@ -23,6 +23,8 @@ pub struct HostState {
     pub wasi: Option<wasmtime_wasi::p1::WasiP1Ctx>,
     /// The preview2 WASI context of a component instance given a `Wasm\Wasi`.
     pub wasi_p2: Option<WasiP2>,
+    /// Outgoing wasi:http of a component instance given a `Wasm\\Wasi` with httpHosts.
+    pub http: Option<crate::component::http::WasiHttp>,
     /// Set once an instance with a `Wasm\Suspending` import joins this store.
     /// From then on every PHP callback is async and every call goes through
     /// `suspend::drive`, because wasmtime rejects sync calls in the store.
@@ -55,6 +57,19 @@ impl wasmtime_wasi::WasiView for HostState {
         wasmtime_wasi::WasiCtxView {
             ctx: &mut p2.ctx,
             table: &mut p2.table,
+        }
+    }
+}
+
+impl wasmtime_wasi_http::WasiHttpView for HostState {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
+        let (Some(p2), Some(http)) = (self.wasi_p2.as_mut(), self.http.as_mut()) else {
+            panic!("wasi:http functions only exist in stores given a Wasm\\Wasi with httpHosts");
+        };
+        wasmtime_wasi_http::WasiHttpCtxView {
+            hooks: &mut http.hooks,
+            table: &mut p2.table,
+            ctx: &mut http.ctx,
         }
     }
 }

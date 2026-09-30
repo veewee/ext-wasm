@@ -18,6 +18,7 @@ use wasmtime::component::{ResourceTable, Val};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
 
+use crate::component::http::{self, HostRule, WasiHttp};
 use crate::component::instance::Instance as ComponentInstance;
 use crate::engine::engine;
 use crate::error::{error, runtime_error, type_error, value_error};
@@ -50,6 +51,8 @@ pub struct Wasi {
     stderr: MemoryOutputPipe,
     output_limit: usize,
     used: Cell<bool>,
+    /// The hosts a component may send HTTP requests to; `None` links no wasi:http.
+    http_hosts: Option<Vec<HostRule>>,
 }
 
 #[php_impl]
@@ -58,13 +61,16 @@ impl Wasi {
     /// @param array<string, string>|null $env
     /// @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
     /// @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
+    /// @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"
     pub fn __construct(
         args: Option<Vec<String>>,
         env: Option<&ZendHashTable>,
         preopens: Option<&ZendHashTable>,
         stdin: Option<BinarySlice<u8>>,
         outputLimit: Option<i64>,
+        httpHosts: Option<&ZendHashTable>,
     ) -> PhpResult<Self> {
+        let http_hosts = httpHosts.map(http::parse_hosts).transpose()?;
         let output_limit = match outputLimit {
             None => DEFAULT_OUTPUT_LIMIT,
             Some(limit) => usize::try_from(limit)
@@ -132,6 +138,7 @@ impl Wasi {
             stderr,
             output_limit,
             used: Cell::new(false),
+            http_hosts,
         })
     }
 
@@ -223,9 +230,22 @@ impl Wasi {
             ctx: builder.build(),
             table: ResourceTable::new(),
         };
-        store.with(|mut ctx| ctx.data_mut().wasi_p2 = Some(wasi));
+        let http = self
+            .http_hosts
+            .clone()
+            .map(|rules| WasiHttp::new(rules, socket_timeout()));
+        store.with(|mut ctx| {
+            let state = ctx.data_mut();
+            state.wasi_p2 = Some(wasi);
+            state.http = http;
+        });
         *self.component.borrow_mut() = Some(store.clone());
         Ok(())
+    }
+
+    /// Whether components given this object get wasi:http.
+    pub fn allows_http(&self) -> bool {
+        self.http_hosts.is_some()
     }
 
     fn start_component(&self, instance: &ComponentInstance) -> PhpResult<i64> {
@@ -323,4 +343,17 @@ fn import_object(store: &SharedStore) -> PhpResult<ZBox<ZendHashTable>> {
     let mut object = ZendHashTable::new();
     object.insert("wasi_snapshot_preview1", namespace)?;
     Ok(object)
+}
+
+/// PHP's default_socket_timeout, which also bounds the requests of components.
+fn socket_timeout() -> Option<std::time::Duration> {
+    let settings = ext_php_rs::zend::ExecutorGlobals::get().ini_values();
+    let seconds: f64 = settings
+        .get("default_socket_timeout")
+        .cloned()
+        .flatten()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(60.0);
+    // A negative or zero timeout means no limit in PHP.
+    (seconds > 0.0).then(|| std::time::Duration::from_secs_f64(seconds))
 }

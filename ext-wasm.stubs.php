@@ -307,10 +307,11 @@ namespace Wasm {
          * @param array<string, string>|null $env
          * @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
          * @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
+         * @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"
          *
          * @param string|null $stdin
          */
-        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null) {}
+        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null, ?array $httpHosts = null) {}
 
         /**
          * The preview1 functions for a core module.

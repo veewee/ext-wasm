@@ -14,3 +14,4 @@ tools/*.phar binary
 /examples/async/vendor/
 /examples/async/composer.lock
 /tests/fixtures/component-wasi/target/
+/tests/fixtures/component-http/target/

@@ -38,6 +38,10 @@ impl Instance {
         imports::link(&store, &mut linker, component, imports)?;
         if let Some(wasi) = wasi {
             wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(link_error)?;
+            if wasi.allows_http() {
+                wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)
+                    .map_err(link_error)?;
+            }
             // The context builds only once, so it is taken after linking succeeded.
             linker
                 .instantiate_pre(&component.inner)

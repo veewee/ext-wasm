@@ -201,6 +201,14 @@ A PHP import returns its ok value directly and signals an err by throwing `new C
 
 With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1. A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
 
+A component can make HTTP and HTTPS requests through `wasi:http` when the `Wasi` object lists the hosts it may reach:
+
+```php
+$wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.example.org']);
+```
+
+An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Each request is bounded by PHP's `default_socket_timeout`, for connecting and for every wait on the response. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
+
 Components cannot be combined with core objects: a component instance has a store of its own. Resources (WIT handles) are not supported yet: a function that uses one throws a `RuntimeError` naming the type, and an import that needs one is a `LinkError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
