@@ -209,7 +209,27 @@ $wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.exampl
 
 An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Connecting, waiting for the response headers and every wait between body chunks are each limited to PHP's `default_socket_timeout`, read when the component is instantiated, and the whole setup until the headers, TLS handshake included, to twice that. With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies and the TLS handshake has none. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
 
-Components cannot be combined with core objects: a component instance has a store of its own. Resources (WIT handles) are not supported yet: a function that uses one throws a `RuntimeError` naming the type, and an import that needs one is a `LinkError`. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
+Resources, the WIT types with handles and methods, work in both directions. A resource a component exports is a `Wasm\Component\ResourceClass` in its interface, and its handles are `Wasm\Component\Resource` objects:
+
+```php
+$counters = $instance->exports->get('docs:demo/counters');
+$counter = $counters->get('counter')->new(5);   // [constructor]counter
+$counter->increment();                          // [method]counter.increment
+$counters->get('counter')->zero();              // [static]counter.zero
+$counter->drop();                               // or let PHP release it
+```
+
+Releasing the PHP object drops the handle, and the component runs its destructor for it. Passing a handle where WIT expects an owned value moves it into the component: the PHP object is unusable afterwards. A borrowed parameter leaves it with PHP. A method called `drop` is reached with `$counter->call('drop')`.
+
+A resource a component imports is implemented by a PHP class, given by name in the import object:
+
+```php
+$instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::class]], wasi: $wasi);
+```
+
+`[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each of these methods, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
+
+Components cannot be combined with core objects: a component instance has a store of its own, and resources cannot pass between two component instances yet. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`. PHP imports of a component are synchronous and cannot switch Fibers.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
 

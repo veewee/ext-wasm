@@ -14,6 +14,7 @@ use wasmtime::component::types::Type;
 use crate::component::error::thrown;
 use std::rc::Rc;
 
+use crate::component::host_resource;
 use crate::component::resource::{self, Resource};
 use crate::component::wit_type;
 use crate::error::error;
@@ -291,6 +292,11 @@ pub fn to_val(
             Val::Flags(set)
         }
         Type::Own(resource_ty) | Type::Borrow(resource_ty) => {
+            if let Some(handle) =
+                host_resource::lower(ctx, value, resource_ty, matches!(ty, Type::Own(_)))?
+            {
+                return Ok(Val::Resource(handle));
+            }
             let resource = downcast::<Resource>(value).ok_or_else(|| mismatch(value, ty))?;
             let handle = resource
                 .handle()
@@ -406,6 +412,9 @@ pub fn from_val(
             return object(ResultValue { ok, value }.into_zval(false));
         }
         (Val::Resource(handle), Type::Own(_) | Type::Borrow(_)) => {
+            if let Some(object) = host_resource::lift(ctx, handle)? {
+                return Ok(object);
+            }
             if !handle.owned() {
                 return Err(ConvertError::Runtime(
                     "borrowed resources of another component are not supported yet".into(),

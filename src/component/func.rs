@@ -4,6 +4,7 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
 use wasmtime::component::Val;
 
+use crate::component::host_resource;
 use crate::component::resource;
 use crate::component::value::{to_val, unwrap_result};
 use crate::error::argument_count_error;
@@ -55,12 +56,25 @@ impl Func {
                 .collect::<Result<Vec<Val>, _>>();
             // Resources given for own parameters move only when the call runs.
             resource::commit_moves(converted.is_ok());
-            let params: Vec<Val> = first.into_iter().chain(converted?).collect();
-            let result_types: Vec<_> = ty.results().collect();
-            let mut results = vec![Val::Bool(false); result_types.len()];
-            if let Err(err) = self.inner.call(&mut ctx, &params, &mut results) {
-                return Err(call_error(&mut ctx, err));
+            let called = match converted {
+                Ok(converted) => {
+                    let params: Vec<Val> = first.into_iter().chain(converted).collect();
+                    let mut results = vec![Val::Bool(false); ty.results().len()];
+                    self.inner
+                        .call(&mut ctx, &params, &mut results)
+                        .map(|()| results)
+                        .map_err(|err| call_error(&mut ctx, err))
+                }
+                Err(err) => Err(err.into()),
+            };
+            // PHP objects lent to the component come back whether or not the call worked.
+            let mut released = Vec::new();
+            host_resource::reclaim_lent(&mut ctx, &mut released);
+            for object in released {
+                self.store.put_garbage(object);
             }
+            let results = called?;
+            let result_types: Vec<_> = ty.results().collect();
             match (results.first(), result_types.first()) {
                 (Some(val), Some(ty)) => unwrap_result(&mut ctx, val, ty),
                 _ => Ok(Zval::null()),

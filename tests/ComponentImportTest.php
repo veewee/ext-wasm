@@ -249,7 +249,7 @@ final class ComponentImportTest extends TestCase
         (new \Fiber(fn () => $exports->callNow()))->start();
     }
 
-    public function test_an_import_that_needs_a_resource_is_a_link_error(): void
+    public function test_a_resource_import_needs_a_class_name(): void
     {
         $component = new Component(<<<'WAT'
             (component
@@ -258,7 +258,7 @@ final class ComponentImportTest extends TestCase
             WAT);
 
         $this->expectException(LinkError::class);
-        $this->expectExceptionMessage('not supported yet');
+        $this->expectExceptionMessage('expects the name of a PHP class');
         new Instance($component, ['thing' => fn () => null, 'use-thing' => fn () => null]);
     }
 }

@@ -3,6 +3,7 @@
 pub mod error;
 pub mod exports;
 pub mod func;
+pub mod host_resource;
 pub mod http;
 pub mod imports;
 pub mod instance;

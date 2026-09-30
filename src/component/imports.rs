@@ -1,8 +1,10 @@
 //! PHP callables as the imports of a component.
 
+use ext_php_rs::convert::IntoZval;
 use ext_php_rs::convert::IntoZvalDyn;
 use ext_php_rs::exception::PhpResult;
-use ext_php_rs::types::{ZendCallable, ZendHashTable, Zval};
+use ext_php_rs::types::{ZendCallable, ZendHashTable, ZendObject, Zval};
+use ext_php_rs::zend::ClassEntry;
 use ext_php_rs::zend::ExecutorGlobals;
 use wasmtime::StoreContextMut;
 use wasmtime::component::types::{ComponentFunc, ComponentItem, Type};
@@ -11,6 +13,7 @@ use wasmtime::component::{Linker, LinkerInstance, Val};
 use crate::callback::FiberSwitchBlock;
 use crate::component::Component;
 use crate::component::error::class_entry as component_error;
+use crate::component::resource::is_resource_function;
 use crate::component::value::{ResultValue, camel, from_val, to_val};
 use crate::component::wit_type;
 use crate::engine::engine;
@@ -31,13 +34,30 @@ pub fn link(
             continue;
         }
         let unversioned = name.split('@').next().unwrap_or(name);
+        if matches!(item.ty, ComponentItem::Resource(_)) {
+            // Without a class this is a world's `use` of an interface resource,
+            // which the interface import defines.
+            let Some(value) =
+                imports.and_then(|imports| imports.get(name).or_else(|| imports.get(unversioned)))
+            else {
+                continue;
+            };
+            let class = resource_class(Some(value), name)?;
+            let ty = store.with(|mut ctx| ctx.data_mut().host_resources.register(class));
+            linker
+                .root()
+                .resource(name, ty, release_host_resource)
+                .map_err(link_error)?;
+            continue;
+        }
         let value = imports
             .and_then(|imports| imports.get(name).or_else(|| imports.get(unversioned)))
             .filter(|value| !value.is_null())
             .ok_or_else(|| link_error(format!("missing import \"{name}\"")))?;
         match &item.ty {
             ComponentItem::ComponentFunc(ty) => {
-                define(store, &mut linker.root(), name, name, ty, value)?;
+                let target = callable_target(store, value, name)?;
+                define(&mut linker.root(), name, name, ty, target)?;
             }
             ComponentItem::ComponentInstance(instance) => {
                 let functions = value.array().ok_or_else(|| {
@@ -50,24 +70,47 @@ pub fn link(
                     .exports(engine())
                     .map(|(export, item)| (export, item.ty))
                     .collect();
+                // Keys PHP may give: the resources by name, the functions camelCase.
                 for (key, _) in functions.iter() {
                     let key = key.to_string();
-                    if !declared.iter().any(|(export, _)| camel(export) == key) {
+                    let known = declared.iter().any(|(export, item)| match item {
+                        ComponentItem::Resource(_) => *export == key,
+                        _ => !is_resource_function(export) && camel(export) == key,
+                    });
+                    if !known {
                         return Err(link_error(format!(
                             "import \"{name}\" declares no function \"{key}\""
                         )));
                     }
                 }
                 let mut target = linker.instance(name).map_err(link_error)?;
+                let mut classes: Vec<(String, String)> = Vec::new();
+                for (export, item) in &declared {
+                    if let ComponentItem::Resource(_) = item {
+                        let class =
+                            resource_class(functions.get(*export), &format!("{name}#{export}"))?;
+                        let ty = store
+                            .with(|mut ctx| ctx.data_mut().host_resources.register(class.clone()));
+                        target
+                            .resource(export, ty, release_host_resource)
+                            .map_err(link_error)?;
+                        classes.push((export.to_string(), class));
+                    }
+                }
                 for (export, item) in &declared {
                     let path = format!("{name}#{export}");
                     let ComponentItem::ComponentFunc(ty) = item else {
-                        return Err(unsupported_import(&path));
+                        continue;
                     };
-                    let callable = functions
-                        .get(camel(export).as_str())
-                        .ok_or_else(|| link_error(format!("missing import \"{path}\"")))?;
-                    define(store, &mut target, export, &path, ty, callable)?;
+                    let target_fn = if is_resource_function(export) {
+                        resource_target(export, &classes, &path)?
+                    } else {
+                        let callable = functions
+                            .get(camel(export).as_str())
+                            .ok_or_else(|| link_error(format!("missing import \"{path}\"")))?;
+                        callable_target(store, callable, &path)?
+                    };
+                    define(&mut target, export, &path, ty, target_fn)?;
                 }
             }
             _ => return Err(unsupported_import(name)),
@@ -82,20 +125,117 @@ fn unsupported_import(name: &str) -> ext_php_rs::exception::PhpException {
     ))
 }
 
-fn define(
-    store: &SharedStore,
-    target: &mut LinkerInstance<'_, HostState>,
-    name: &str,
-    path: &str,
-    ty: &ComponentFunc,
-    value: &Zval,
-) -> PhpResult<()> {
+/// What a component import runs in PHP.
+#[derive(Clone)]
+enum Target {
+    /// A callable, by its key in the store's values.
+    Callable(usize),
+    /// `new Class(...)` for `[constructor]resource`.
+    Constructor(String),
+    /// An instance method for `[method]resource.name`; the first argument is the object.
+    Method(String),
+    /// A static method `Class::name` for `[static]resource.name`.
+    Static(String),
+}
+
+fn callable_target(store: &SharedStore, value: &Zval, path: &str) -> PhpResult<Target> {
     if downcast::<crate::func::Func>(value).is_some() || !value.is_callable() {
         return Err(link_error(format!(
             "import \"{path}\" expects a PHP callable, got {}",
             debug_type(value)
         )));
     }
+    let key = store.with(|mut ctx| {
+        ctx.data_mut()
+            .values
+            .insert_permanent(value.shallow_clone())
+    });
+    Ok(Target::Callable(key))
+}
+
+/// The destructor of a host resource: the component dropped its handle. The
+/// object goes where PHP destructors may run, not inside this call.
+fn release_host_resource(
+    mut ctx: StoreContextMut<'_, HostState>,
+    rep: u32,
+) -> wasmtime::Result<()> {
+    if let Some(object) = ctx.data_mut().host_resources.take(rep) {
+        store::of(&ctx).put_garbage(object);
+    }
+    Ok(())
+}
+
+fn resource_class(value: Option<&Zval>, path: &str) -> PhpResult<String> {
+    let class = value
+        .and_then(|value| value.str().filter(|_| value.is_string()))
+        .filter(|class| ClassEntry::try_find(class).is_some())
+        .ok_or_else(|| {
+            link_error(format!(
+                "import \"{path}\" is a resource and expects the name of a PHP class implementing it, got {}",
+                value.map_or_else(|| "nothing".to_string(), debug_type)
+            ))
+        })?;
+    Ok(class.to_string())
+}
+
+/// The PHP method behind a `[constructor]`, `[method]` or `[static]` import.
+fn resource_target(export: &str, classes: &[(String, String)], path: &str) -> PhpResult<Target> {
+    let class_of = |resource: &str| {
+        classes
+            .iter()
+            .find(|(name, _)| name == resource)
+            .map(|(_, class)| class.clone())
+            .ok_or_else(|| {
+                link_error(format!(
+                    "import \"{path}\" belongs to no resource of this interface"
+                ))
+            })
+    };
+    if let Some(resource) = export.strip_prefix("[constructor]") {
+        return Ok(Target::Constructor(class_of(resource)?));
+    }
+    let (kind, rest) = if let Some(rest) = export.strip_prefix("[method]") {
+        ("method", rest)
+    } else {
+        ("static", export.strip_prefix("[static]").unwrap_or(export))
+    };
+    let (resource, function) = rest
+        .split_once('.')
+        .ok_or_else(|| link_error(format!("import \"{path}\" has no resource prefix")))?;
+    let class = class_of(resource)?;
+    let method = camel(function);
+    let is_static = php_bool("is_callable", &[&format!("{class}::{method}")]);
+    let exists = php_bool("method_exists", &[&class, &method]);
+    match kind {
+        "method" if exists && !is_static => Ok(Target::Method(method)),
+        "static" if is_static => Ok(Target::Static(format!("{class}::{method}"))),
+        _ => Err(link_error(format!(
+            "{class} implements \"{path}\" and needs a public {} method {method}()",
+            if kind == "static" {
+                "static"
+            } else {
+                "instance"
+            }
+        ))),
+    }
+}
+
+fn php_bool(function: &str, args: &[&String]) -> bool {
+    let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| *arg as &dyn IntoZvalDyn).collect();
+    ZendCallable::try_from_name(function)
+        .ok()
+        .and_then(|callable| callable.try_call(args).ok())
+        .and_then(|result| result.bool())
+        .unwrap_or(false)
+}
+
+fn define(
+    target: &mut LinkerInstance<'_, HostState>,
+    name: &str,
+    path: &str,
+    ty: &ComponentFunc,
+    what: Target,
+) -> PhpResult<()> {
     if let Some(unsupported) = ty
         .params()
         .map(|(_, ty)| ty)
@@ -106,14 +246,9 @@ fn define(
             "import \"{path}\" uses {unsupported}, which is not supported yet"
         )));
     }
-    let key = store.with(|mut ctx| {
-        ctx.data_mut()
-            .values
-            .insert_permanent(value.shallow_clone())
-    });
     target
         .func_new(name, move |mut ctx, ty, params, results| {
-            invoke(&mut ctx, key, &ty, params, results)
+            invoke(&mut ctx, &what, &ty, params, results)
         })
         .map_err(link_error)
 }
@@ -122,9 +257,7 @@ fn define(
 fn unsupported_part(ty: &Type) -> Option<String> {
     let nested = |types: Vec<Type>| types.iter().find_map(unsupported_part);
     match ty {
-        Type::Own(_)
-        | Type::Borrow(_)
-        | Type::Map(_)
+        Type::Map(_)
         | Type::FixedLengthList(_)
         | Type::Future(_)
         | Type::Stream(_)
@@ -141,13 +274,16 @@ fn unsupported_part(ty: &Type) -> Option<String> {
 
 fn invoke(
     ctx: &mut StoreContextMut<'_, HostState>,
-    key: usize,
+    what: &Target,
     ty: &ComponentFunc,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
     let store = store::of(ctx);
-    let callable = ctx.data().values.get(key).shallow_clone();
+    let callable = match what {
+        Target::Callable(key) => ctx.data().values.get(*key).shallow_clone(),
+        _ => Zval::null(),
+    };
     let args = params
         .iter()
         .zip(ty.params())
@@ -155,9 +291,8 @@ fn invoke(
         .collect::<Result<Vec<Zval>, _>>()?;
 
     let returned = store.enter_component(ctx, || {
-        let args: Vec<&dyn IntoZvalDyn> = args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect();
         let _no_fiber_switch = FiberSwitchBlock::new();
-        ZendCallable::new(&callable)?.try_call(args)
+        call_target(what, &callable, &args)
     });
 
     let mut thrown = None;
@@ -198,6 +333,35 @@ fn invoke(
         drop((returned, args, callable, thrown));
     });
     outcome
+}
+
+fn call_target(what: &Target, callable: &Zval, args: &[Zval]) -> ext_php_rs::error::Result<Zval> {
+    match what {
+        Target::Callable(_) => ZendCallable::new(callable)?.try_call(dyn_args(args)),
+        Target::Static(name) => ZendCallable::try_from_name(name)?.try_call(dyn_args(args)),
+        Target::Constructor(class) => {
+            let class =
+                ClassEntry::try_find(class).ok_or(ext_php_rs::error::Error::InvalidScope)?;
+            let object = ZendObject::new(class);
+            if !class.constructor.is_null() {
+                object.try_call_method("__construct", dyn_args(args))?;
+            }
+            object.into_zval(false)
+        }
+        Target::Method(method) => {
+            let (this, rest) = args
+                .split_first()
+                .ok_or(ext_php_rs::error::Error::InvalidScope)?;
+            let object = this
+                .object()
+                .ok_or(ext_php_rs::error::Error::InvalidScope)?;
+            object.try_call_method(method, dyn_args(rest))
+        }
+    }
+}
+
+fn dyn_args(args: &[Zval]) -> Vec<&dyn IntoZvalDyn> {
+    args.iter().map(|arg| arg as &dyn IntoZvalDyn).collect()
 }
 
 fn pending_component_error() -> bool {

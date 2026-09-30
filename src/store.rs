@@ -25,6 +25,8 @@ pub struct HostState {
     pub wasi_p2: Option<WasiP2>,
     /// Outgoing wasi:http of a component instance given a `Wasm\\Wasi` with httpHosts.
     pub http: Option<crate::component::http::WasiHttp>,
+    /// The PHP objects behind resources a component imports.
+    pub host_resources: crate::component::host_resource::HostResources,
     /// Set once an instance with a `Wasm\Suspending` import joins this store.
     /// From then on every PHP callback is async and every call goes through
     /// `suspend::drive`, because wasmtime rejects sync calls in the store.
