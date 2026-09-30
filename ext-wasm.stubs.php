@@ -181,6 +181,31 @@ namespace Wasm {
          * @param string $bytes
          */
         public function __construct(string $bytes) {}
+
+        /**
+         * @return list<string>
+         *
+         * @param \Wasm\Module $module
+         * @param string $name
+         * @return array
+         */
+        public static function customSections(\Wasm\Module $module, string $name): array {}
+
+        /**
+         * @return list<array{name: string, kind: string}>
+         *
+         * @param \Wasm\Module $module
+         * @return array
+         */
+        public static function exports(\Wasm\Module $module): array {}
+
+        /**
+         * @return list<array{module: string, name: string, kind: string}>
+         *
+         * @param \Wasm\Module $module
+         * @return array
+         */
+        public static function imports(\Wasm\Module $module): array {}
     }
 
     /**
@@ -222,22 +247,68 @@ namespace Wasm {
          */
         public function set(int $index, mixed $value = null): void {}
     }
+
+    /**
+     * @param string $bytes
+     * @return \Wasm\Module
+     */
+    function compile(string $bytes): \Wasm\Module {}
+
+    /**
+     * Like JS `WebAssembly.instantiate()`: bytes give `['module' => Module, 'instance' => Instance]`,
+     * a Module gives the Instance.
+     *
+     * @return Instance|array{module: Module, instance: Instance}
+     *
+     * @param mixed $source
+     * @param array|null $imports
+     * @return mixed
+     */
+    function instantiate(mixed $source, ?array $imports = null): mixed {}
+
+    /**
+     * Whether `bytes` is a valid wasm binary or WAT module.
+     *
+     * @param string $bytes
+     * @return bool
+     */
+    function validate(string $bytes): bool {}
 }
 
 namespace Wasm\Exception {
     class CompileError extends \Wasm\Exception\WasmException {
-        public function __construct() {}
+        /**
+         * @param string|null $message
+         * @param int|null $code
+         * @param mixed $previous
+         */
+        public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
     }
 
     class LinkError extends \Wasm\Exception\WasmException {
-        public function __construct() {}
+        /**
+         * @param string|null $message
+         * @param int|null $code
+         * @param mixed $previous
+         */
+        public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
     }
 
     class RuntimeError extends \Wasm\Exception\WasmException {
-        public function __construct() {}
+        /**
+         * @param string|null $message
+         * @param int|null $code
+         * @param mixed $previous
+         */
+        public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
     }
 
     class WasmException extends \Exception {
-        public function __construct() {}
+        /**
+         * @param string|null $message
+         * @param int|null $code
+         * @param mixed $previous
+         */
+        public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
     }
 }

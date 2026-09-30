@@ -5,6 +5,7 @@ mod engine;
 mod error;
 mod exports;
 mod func;
+mod functions;
 mod global;
 mod imports;
 mod instance;
@@ -26,10 +27,16 @@ pub extern "C" fn php_module_info(_module: *mut ModuleEntry) {
     info_table_end!();
 }
 
+extern "C" fn request_startup(_type: i32, _module_number: i32) -> i32 {
+    error::adopt_exception_behaviour();
+    0
+}
+
 #[php_module]
 pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
-    module
+    functions::register(module)
         .info_function(php_module_info)
+        .request_startup_function(request_startup)
         .class::<error::WasmException>()
         .class::<error::CompileError>()
         .class::<error::LinkError>()
