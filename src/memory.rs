@@ -47,15 +47,19 @@ impl Memory {
 
     pub fn read(&self, offset: i64, length: i64) -> PhpResult<Binary<u8>> {
         let (offset, length) = (to_usize(offset, "offset")?, to_usize(length, "length")?);
-        let mut buffer = vec![0; length];
-        self.store
-            .with(|ctx| self.inner.read(&ctx, offset, &mut buffer))
-            .map_err(|_| {
-                value_error(format!(
-                    "reading {length} byte(s) at offset {offset} is out of bounds"
-                ))
-            })?;
-        Ok(buffer.into())
+        // Checked before copying, so a bogus length throws instead of allocating.
+        self.store.with(|ctx| {
+            let data = self.inner.data(&ctx);
+            offset
+                .checked_add(length)
+                .and_then(|end| data.get(offset..end))
+                .map(|bytes| bytes.to_vec().into())
+                .ok_or_else(|| {
+                    value_error(format!(
+                        "reading {length} byte(s) at offset {offset} is out of bounds"
+                    ))
+                })
+        })
     }
 
     pub fn write(&self, offset: i64, data: BinarySlice<u8>) -> PhpResult<()> {

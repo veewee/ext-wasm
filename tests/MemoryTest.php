@@ -55,6 +55,14 @@ final class MemoryTest extends TestCase
         $memory->read(self::PAGE - 2, 4);
     }
 
+    public function test_huge_read_length_throws_instead_of_allocating(): void
+    {
+        $memory = new Memory(['initial' => 1]);
+
+        $this->expectException(\ValueError::class);
+        $memory->read(0, 1 << 46);
+    }
+
     public function test_out_of_bounds_write_throws(): void
     {
         $memory = new Memory(['initial' => 1]);
