@@ -52,7 +52,7 @@ function greet(string $name)
 echo greet(42);
 ```
 
-Compiling the 18 MB module takes about three seconds, and formatting itself takes a few milliseconds.
+The first run compiles the 18 MB module, which takes about three seconds. The compiled code goes into the extension's compilation cache, so every run after that takes about a tenth of a second.
 
 ## Inner workings
 

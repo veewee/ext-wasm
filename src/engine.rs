@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 
-use wasmtime::{Config, Engine};
+use ext_php_rs::zend::ExecutorGlobals;
+use wasmtime::{Cache, CacheConfig, Config, Engine};
 
 /// One engine per process. Created on first use rather than at MINIT so that
 /// wasmtime installs its signal handlers after PHP and other extensions have
@@ -20,8 +21,31 @@ pub fn engine() -> &'static Engine {
         // Mach exception ports do not survive fork(), which PHP-FPM and pcntl rely on.
         #[cfg(target_os = "macos")]
         config.macos_use_mach_ports(false);
+        config.cache(compilation_cache());
         Engine::new(&config).expect("the wasmtime engine configuration is valid")
     })
+}
+
+/// The on-disk cache of compiled machine code, configured by `wasm.cache` and
+/// `wasm.cache_dir`. Like a browser's code cache it is keyed by the module
+/// bytes and the engine settings, so a changed module or engine never gets a
+/// stale entry. A directory that cannot be used disables the cache rather than
+/// failing compilation.
+fn compilation_cache() -> Option<Cache> {
+    let settings = ExecutorGlobals::get().ini_values();
+    let setting = |name: &str| settings.get(name).cloned().flatten().unwrap_or_default();
+    if !matches!(
+        setting("wasm.cache").to_ascii_lowercase().as_str(),
+        "1" | "on" | "yes" | "true"
+    ) {
+        return None;
+    }
+    let mut config = CacheConfig::new();
+    let directory = setting("wasm.cache_dir");
+    if !directory.is_empty() {
+        config.with_directory(directory);
+    }
+    Cache::new(config).ok()
 }
 
 /// Runs `compile` on a rayon pool whose threads exist in this process.

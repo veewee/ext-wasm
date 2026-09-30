@@ -12,11 +12,16 @@ namespace Test;
  */
 trait RunsPhpInSubprocess
 {
-    private function runPhp(string $code, ?int &$exitCode = null): string
+    /** @param array<string, string> $settings extra php.ini settings for the child */
+    private function runPhp(string $code, ?int &$exitCode = null, array $settings = []): string
     {
         $file = tempnam(sys_get_temp_dir(), 'wasm-test');
         file_put_contents($file, $code);
-        $command = [PHP_BINARY, '-n', '-d', 'extension=' . self::extensionUnderTest(), $file];
+        $command = [PHP_BINARY, '-n', '-d', 'extension=' . self::extensionUnderTest()];
+        foreach ($settings as $name => $value) {
+            array_push($command, '-d', "$name=$value");
+        }
+        $command[] = $file;
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         $output = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
         $exitCode = proc_close($process);

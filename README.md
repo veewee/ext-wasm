@@ -124,6 +124,19 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 The [examples](examples) folder has small scripts for each feature. [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
 
+## Compilation cache
+
+Compiling a large module to machine code takes a while: mago's 18 MB build needs about three seconds. Like a browser, the extension keeps compiled code in a cache on disk, keyed by the module bytes and the engine settings, so the next process loads it in milliseconds. A changed module or a new extension version simply compiles again.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `wasm.cache` | `1` | Enables the cache. |
+| `wasm.cache_dir` | empty | Directory for cached code. Empty uses wasmtime's default, `~/.cache/wasmtime` on Linux and `~/Library/Caches/BytecodeAlliance.wasmtime` on macOS. |
+
+Both can only be set in php.ini or with `-d`, because the engine is created once per process. If the directory cannot be created or written, the extension compiles without the cache.
+
+The cache holds machine code that runs inside the PHP process, so anyone who can write to that directory can run code as the PHP user. On a server, point `wasm.cache_dir` at a directory only the PHP user can write to.
+
 ## Limits worth knowing
 
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.
