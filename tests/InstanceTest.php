@@ -1,57 +1,67 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Test;
 
 use PHPUnit\Framework\TestCase;
-use Wasm\InstanceBuilder;
-use Wasm\WasmInstance;
+use Wasm\Exports;
+use Wasm\Func;
+use Wasm\Instance;
+use Wasm\Module;
 
-class InstanceTest extends TestCase
+final class InstanceTest extends TestCase
 {
-    public function test_instance_cannot_be_constructed() {
-        $this->expectException(\Exception::class);
-        new WasmInstance();
-    }
+    private const WAT = <<<'EOWAT'
+        (module
+          (func (export "add_one") (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add))
+        EOWAT;
 
-    public function test_instance_builder_cannot_be_constructed() {
-        $this->expectException(\Exception::class);
-        new InstanceBuilder();
-    }
-
-    public function test_instance_can_be_built_from_builder() {
-        $instance = $this->createBuilderFromWat()->build();
-        self::assertInstanceOf(WasmInstance::class, $instance);
-    }
-
-    public function test_instance_can_be_built_from_instance() {
-        $instance = WasmInstance::fromBuilder($this->createBuilderFromWat());
-        self::assertInstanceOf(WasmInstance::class, $instance);
-    }
-
-    public function test_it_can_build_multiple_instances_from_builder() {
-        $instance1 = $this->createBuilderFromWat()->build();
-        $instance2 = $this->createBuilderFromWat()->build();
-
-        self::assertInstanceOf(WasmInstance::class, $instance1);
-        self::assertInstanceOf(WasmInstance::class, $instance2);
-
-        self::assertSame([33], $instance1->add_one(32));
-    }
-
-    public function test_instance_cannot_be_build_on_invalid_wat() {
-        $this->expectException(\Exception::class);
-        WasmInstance::fromBuilder($this->createBuilderFromWat('(module INVALIDWAT'));
-    }
-
-    private function createBuilderFromWat(?string $wat = null): InstanceBuilder
+    public function test_it_instantiates_a_module(): void
     {
-        return InstanceBuilder::fromWat($wat ?? <<<'EOWAT'
+        $instance = new Instance(new Module(self::WAT));
+
+        self::assertInstanceOf(Exports::class, $instance->exports);
+    }
+
+    public function test_exports_are_funcs(): void
+    {
+        $instance = new Instance(new Module(self::WAT));
+
+        self::assertInstanceOf(Func::class, $instance->exports->add_one);
+        self::assertTrue(isset($instance->exports->add_one));
+        self::assertFalse(isset($instance->exports->unknown));
+    }
+
+    public function test_it_builds_multiple_instances_from_one_module(): void
+    {
+        $module = new Module(self::WAT);
+        $one = new Instance($module);
+        $two = new Instance($module);
+
+        self::assertSame(33, $one->exports->add_one(32));
+        self::assertSame(34, $two->exports->add_one(33));
+    }
+
+    public function test_unknown_export_throws(): void
+    {
+        $instance = new Instance(new Module(self::WAT));
+
+        $this->expectException(\Error::class);
+        $instance->exports->unknown;
+    }
+
+    public function test_exports_are_iterable_in_module_order(): void
+    {
+        $instance = new Instance(new Module(<<<'EOWAT'
             (module
-              (type $t0 (func (param i32) (result i32)))
-              (func $add_one (export "add_one") (type $t0) (param $p0 i32) (result i32)
-                get_local $p0
-                i32.const 1
-                i32.add))
-            EOWAT);
+              (func (export "b"))
+              (func (export "a")))
+            EOWAT));
+
+        self::assertSame(['b', 'a'], array_keys(iterator_to_array($instance->exports)));
     }
 }

@@ -1,10 +1,11 @@
 [package]
-name = "ext-wasm"
+name = "wasm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Toon Verwerft <toonverwerft@gmail.com>"]
-description = "A WASM extension for PHP"
+description = "A WebAssembly extension for PHP"
 readme = "README.md"
+license = "MIT"
 keywords = ["php", "extension", "webassembly"]
 categories = ["wasm"]
 
@@ -12,10 +13,15 @@ categories = ["wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
-cargo-php = "0.1.7"
-ext-php-rs = "0.10.1"
-wasmer = { version = "4.1.0", default-features = true, features = ["sys"] }
-wasmer-compiler = "4.1.0"
+ext-php-rs = "=0.16.0"
+rayon = "=1.12.0"
+wasmparser = { version = "=0.258.0", default-features = false, features = ["std"] }
+wat = "=1.259.0"
+wasmtime = { version = "=49.0.1", default-features = false, features = ["cranelift", "runtime", "std", "wat", "gc", "gc-drc", "parallel-compilation", "cache", "backtrace", "addr2line", "demangle"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p1"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [profile.release]
-strip = "debuginfo"
+strip = "symbols"

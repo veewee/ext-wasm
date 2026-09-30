@@ -1,0 +1,23 @@
+{
+    "name": "veewee/ext-wasm",
+    "description": "WebAssembly for PHP: compile, instantiate and call wasm modules with an API modelled on the JavaScript WebAssembly API.",
+    "type": "php-ext",
+    "license": "MIT",
+    "keywords": ["webassembly", "wasm", "wasmtime", "extension"],
+    "homepage": "https://github.com/veewee/ext-wasm",
+    "authors": [
+        {
+            "name": "Toon Verwerft",
+            "email": "toonverwerft@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "php-ext": {
+        "extension-name": "wasm",
+        "support-zts": true,
+        "support-nts": true,
+        "download-url-method": ["pre-packaged-binary", "composer-default"]
+    }
+}

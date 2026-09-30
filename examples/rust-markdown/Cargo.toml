@@ -1,0 +1,18 @@
+[package]
+name = "markdown"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pulldown-cmark = { version = "=0.13.4", default-features = false, features = ["html"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
+codegen-units = 1

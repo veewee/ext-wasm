@@ -1,5 +1,15 @@
 /target
-/Cargo.lock
 .phpunit.cache
 .phpunit.result.cache
 tools/*.phar binary
+/examples/mago/dist/
+/examples/doom/dist/
+/examples/python/dist/
+/examples/quickjs/dist/
+/examples/rust-markdown/target/
+/examples/oxipng/dist/
+/examples/html/target/
+/examples/typst/target/
+/examples/typst/dist/
+/examples/async/vendor/
+/examples/async/composer.lock

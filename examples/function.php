@@ -1,14 +1,15 @@
 <?php
 
-$instance = Wasm\InstanceBuilder::fromWat(
-    <<<'EOWAT'
+$instance = new Wasm\Instance(new Wasm\Module(<<<'EOWAT'
     (module
-      (type $t0 (func (param i32) (result i32)))
-      (func $add_one (export "add_one") (type $t0) (param $p0 i32) (result i32)
-        get_local $p0
+      (func (export "add_one") (param i32) (result i32)
+        local.get 0
         i32.const 1
         i32.add))
-    EOWAT
-)->build();
+    EOWAT));
 
-var_dump($instance->add_one(42));
+var_dump($instance->exports->add_one(42)); // int(43)
+
+// Exports are Wasm\Func objects, which PHP can call like any callable.
+$addOne = $instance->exports->add_one;
+var_dump(array_map($addOne, [1, 2, 3])); // [2, 3, 4]
