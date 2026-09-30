@@ -13,7 +13,8 @@ use wasmtime::component::{Linker, LinkerInstance, Val};
 use crate::callback::FiberSwitchBlock;
 use crate::component::Component;
 use crate::component::error::class_entry as component_error;
-use crate::component::resource::is_resource_function;
+use crate::component::host_resource;
+use crate::component::resource::{self, is_resource_function};
 use crate::component::value::{ResultValue, camel, from_val, to_val};
 use crate::component::wit_type;
 use crate::engine::engine;
@@ -175,6 +176,17 @@ fn resource_class(value: Option<&Zval>, path: &str) -> PhpResult<String> {
                 value.map_or_else(|| "nothing".to_string(), debug_type)
             ))
         })?;
+    let not_instantiable = ext_php_rs::ffi::ZEND_ACC_INTERFACE
+        | ext_php_rs::ffi::ZEND_ACC_TRAIT
+        | ext_php_rs::ffi::ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
+        // ZEND_ACC_EXPLICIT_ABSTRACT_CLASS, which the bindings leave out.
+        | (1 << 6)
+        | ext_php_rs::ffi::ZEND_ACC_ENUM;
+    if ClassEntry::try_find(class).is_some_and(|entry| entry.ce_flags & not_instantiable != 0) {
+        return Err(link_error(format!(
+            "import \"{path}\" needs an instantiable class, {class} is abstract, an interface, a trait or an enum"
+        )));
+    }
     Ok(class.to_string())
 }
 
@@ -296,6 +308,8 @@ fn invoke(
     });
 
     let mut thrown = None;
+    let lent = host_resource::mark();
+    let moves = resource::moves_mark();
     let outcome = match (&returned, ty.results().next()) {
         (Ok(_), None) => Ok(()),
         (Ok(value), Some(Type::Result(result))) => {
@@ -326,6 +340,14 @@ fn invoke(
         // rethrows it.
         (Err(err), _) => Err(wasmtime::Error::msg(format!("PHP callback failed: {err}"))),
     };
+
+    // The component receives the converted result when this returns Ok.
+    resource::finish_moves(moves, outcome.is_ok());
+    let mut released = Vec::new();
+    host_resource::reclaim(ctx, lent, outcome.is_ok(), &mut released);
+    for object in released {
+        store.put_garbage(object);
+    }
 
     // Releasing these can run PHP destructors, which may use wasm objects again.
     store.enter_component(ctx, move || {

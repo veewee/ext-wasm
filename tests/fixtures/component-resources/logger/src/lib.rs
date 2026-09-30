@@ -18,6 +18,10 @@ impl Guest for Component {
     fn borrow_logger(l: &Logger, line: String) -> String {
         l.write(&line)
     }
+
+    fn take_logger(_l: Logger, n: u32) -> u32 {
+        n
+    }
 }
 
 export!(Component);

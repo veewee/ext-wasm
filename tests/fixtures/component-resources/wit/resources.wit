@@ -32,4 +32,5 @@ world logging {
     export uses-logger: func(prefix: string, line: string) -> string;
     export echo-logger: func(l: logger) -> logger;
     export borrow-logger: func(l: borrow<logger>, line: string) -> string;
+    export take-logger: func(l: logger, n: u32) -> u32;
 }

@@ -49,13 +49,13 @@ impl Func {
                     args.len()
                 )));
             }
+            let lent = host_resource::mark();
+            let moves = resource::moves_mark();
             let converted = args
                 .iter()
                 .zip(&params)
                 .map(|(arg, ty)| to_val(&mut ctx, arg, ty))
                 .collect::<Result<Vec<Val>, _>>();
-            // Resources given for own parameters move only when the call runs.
-            resource::commit_moves(converted.is_ok());
             let called = match converted {
                 Ok(converted) => {
                     let params: Vec<Val> = first.into_iter().chain(converted).collect();
@@ -67,9 +67,11 @@ impl Func {
                 }
                 Err(err) => Err(err.into()),
             };
-            // PHP objects lent to the component come back whether or not the call worked.
+            // Resources given for own parameters belong to the component only
+            // once the call worked, and lent PHP objects always come back.
+            resource::finish_moves(moves, called.is_ok());
             let mut released = Vec::new();
-            host_resource::reclaim_lent(&mut ctx, &mut released);
+            host_resource::reclaim(&mut ctx, lent, called.is_ok(), &mut released);
             for object in released {
                 self.store.put_garbage(object);
             }

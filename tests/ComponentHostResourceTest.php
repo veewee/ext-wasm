@@ -38,6 +38,11 @@ final class PrefixLogger
     }
 }
 
+abstract class AbstractLogger
+{
+    abstract public function write(string $line): string;
+}
+
 final class LoggerWithoutWrite
 {
     public function __construct(string $prefix)
@@ -131,5 +136,63 @@ final class ComponentHostResourceTest extends TestCase
     {
         $this->expectException(LinkError::class);
         self::exports('NoSuchClass');
+    }
+
+    public function test_objects_lent_during_a_nested_call_all_come_back(): void
+    {
+        NestingLogger::$destroyed = [];
+        $exports = self::exports(NestingLogger::class);
+        // The outer object's write() makes a nested call that lends another object.
+        $outer = new NestingLogger('outer', $exports);
+
+        self::assertSame('[outer] hi', $exports->borrowLogger($outer, 'hi'));
+        unset($outer);
+
+        self::assertSame(['inner', 'outer'], NestingLogger::$destroyed);
+    }
+
+    public function test_an_object_given_before_a_failing_argument_is_not_kept(): void
+    {
+        $exports = self::exports();
+
+        try {
+            $exports->takeLogger(new PrefixLogger('kept?'), 'not a number');
+            self::fail('Expected a TypeError');
+        } catch (\TypeError) {
+        }
+
+        self::assertSame(['kept?'], PrefixLogger::$destroyed);
+    }
+
+    public function test_an_abstract_class_is_a_link_error(): void
+    {
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('instantiable');
+        self::exports(AbstractLogger::class);
+    }
+}
+
+/** A logger whose write() calls the component again with another logger. */
+final class NestingLogger
+{
+    /** @var list<string> */
+    public static array $destroyed = [];
+
+    public function __construct(private string $prefix, private ?Exports $exports = null)
+    {
+    }
+
+    public function write(string $line): string
+    {
+        if ($this->exports !== null) {
+            $this->exports->borrowLogger(new NestingLogger('inner'), 'x');
+        }
+
+        return "[$this->prefix] $line";
+    }
+
+    public function __destruct()
+    {
+        self::$destroyed[] = $this->prefix;
     }
 }

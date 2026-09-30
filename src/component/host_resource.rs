@@ -63,13 +63,21 @@ impl HostResources {
 }
 
 thread_local! {
-    /// Host objects lent to the component for `borrow` parameters of the call
-    /// being made; they return to PHP when it ends.
-    static LENT: RefCell<Vec<ResourceAny>> = const { RefCell::new(Vec::new()) };
+    /// PHP objects handed to the component while a call's values are
+    /// converted, with whether each was given as its own. A call takes back
+    /// its entries after it ends: the lent ones always, the owned ones when
+    /// the component never received them.
+    static HANDED: RefCell<Vec<(ResourceAny, bool)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Where the entries of the call about to convert its values start, for a
+/// nested call must not take back those of the call around it.
+pub fn mark() -> usize {
+    HANDED.with(|handed| handed.borrow().len())
 }
 
 /// Hands a PHP object of the class behind `ty` to the component: as its own
-/// for an `own` parameter, lent until `reclaim_lent` for a `borrow`.
+/// for an `own` parameter, lent for a `borrow`.
 pub fn lower(
     ctx: &mut StoreContextMut<'_, HostState>,
     value: &Zval,
@@ -94,15 +102,29 @@ pub fn lower(
     let handle = ResourceDynamic::new_own(rep, n)
         .try_into_resource_any(&mut *ctx)
         .map_err(|err| ConvertError::Runtime(format!("{err:#}")))?;
-    if !owned {
-        LENT.with(|lent| lent.borrow_mut().push(handle));
-    }
+    HANDED.with(|handed| handed.borrow_mut().push((handle, owned)));
     Ok(Some(handle))
 }
 
-/// Takes back the objects lent for the call that just ended.
-pub fn reclaim_lent(ctx: &mut StoreContextMut<'_, HostState>, released: &mut Vec<Zval>) {
-    for handle in LENT.with(|lent| std::mem::take(&mut *lent.borrow_mut())) {
+/// Takes back the objects handed to the component since `mark`: the lent
+/// ones, and the owned ones too when `delivered` is false because the
+/// component never received them.
+pub fn reclaim(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    mark: usize,
+    delivered: bool,
+    released: &mut Vec<Zval>,
+) {
+    let handed = HANDED.with(|handed| {
+        let mut handed = handed.borrow_mut();
+        let mark = mark.min(handed.len());
+        handed.split_off(mark)
+    });
+    for (handle, owned) in handed {
+        if owned && delivered {
+            continue;
+        }
+        // An owned handle the component already took fails here, and stays its.
         if let Ok(resource) = handle.try_into_resource_dynamic(&mut *ctx)
             && let Some(object) = ctx.data_mut().host_resources.take(resource.rep())
         {

@@ -307,7 +307,7 @@ namespace Wasm {
          * @param array<string, string>|null $env
          * @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
          * @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
-         * @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"
+         * @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
          *
          * @param string|null $stdin
          */

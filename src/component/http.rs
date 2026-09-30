@@ -84,6 +84,9 @@ impl HostRule {
 fn split_port(entry: &str) -> Result<(&str, Option<u16>), &'static str> {
     let (host, port) = if let Some(rest) = entry.strip_prefix('[') {
         let (address, after) = rest.split_once(']').ok_or("has an unclosed [")?;
+        if !after.is_empty() && !after.starts_with(':') {
+            return Err("has something after the ] that is not a port");
+        }
         (address, after.strip_prefix(':'))
     } else if entry.matches(':').count() == 1 {
         let (host, port) = entry.split_once(':').expect("one colon");
@@ -224,6 +227,7 @@ mod tests {
         assert!(HostRule::parse("example.com:http").is_err());
         assert!(HostRule::parse("").is_err());
         assert!(HostRule::parse("bücher.example").is_err());
+        assert!(HostRule::parse("[::1]garbage").is_err());
         assert!(rule("Example.COM").allows("example.com", 80));
     }
 }

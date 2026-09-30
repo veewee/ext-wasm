@@ -232,13 +232,23 @@ pub fn take_for_own(resource: &Resource) -> Result<ResourceAny, String> {
     })
 }
 
-/// Ends a conversion: its `own` resources move into the component if it succeeded.
-pub fn commit_moves(succeeded: bool) {
-    let moved = MOVES.with(|moves| std::mem::take(&mut *moves.borrow_mut()));
-    if succeeded {
+/// Where the moves of the call about to convert its values start.
+pub fn moves_mark() -> usize {
+    MOVES.with(|moves| moves.borrow().len())
+}
+
+/// Ends the moves recorded since `mark`: the resources move into the
+/// component when `delivered`, and stay with PHP otherwise.
+pub fn finish_moves(mark: usize, delivered: bool) {
+    let moved = MOVES.with(|moves| {
+        let mut moves = moves.borrow_mut();
+        let mark = mark.min(moves.len());
+        moves.split_off(mark)
+    });
+    if delivered {
         for resource in moved {
-            // SAFETY: the PHP objects are the arguments of the current call,
-            // which hold them alive until the call returns.
+            // SAFETY: the PHP objects are the arguments or the return value of
+            // the call that recorded them, which is still on the stack.
             unsafe { (*resource).mark_moved() };
         }
     }
