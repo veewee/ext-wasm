@@ -415,7 +415,7 @@ namespace Wasm\Component {
      * Functions are camelCase methods; `get()` takes any export by its WIT name,
      * with or without version.
      */
-    class Exports implements \Iterator {
+    class Exports implements \IteratorAggregate {
         /**
          * @param string $name
          * @param array $arguments
@@ -426,16 +426,31 @@ namespace Wasm\Component {
         public function __construct() {}
 
         /**
-         * @return mixed
-         */
-        public function current(): mixed {}
-
-        /**
          * @return \Wasm\Component\Func|\Wasm\Component\Exports
          *
          * @param string $name
          */
         public function get(string $name): mixed {}
+
+        /**
+         * Every export by WIT name. An aggregate rather than an Iterator, so WIT
+         * functions called next or current stay callable as methods.
+         *
+         * @return \Wasm\Component\ExportsIterator
+         */
+        public function getIterator(): \Wasm\Component\ExportsIterator {}
+    }
+
+    /**
+     * Iterates the exports of a component instance by WIT name.
+     */
+    class ExportsIterator implements \Iterator {
+        public function __construct() {}
+
+        /**
+         * @return \Wasm\Component\Func|\Wasm\Component\Exports|null
+         */
+        public function current(): mixed {}
 
         /**
          * @return string|null

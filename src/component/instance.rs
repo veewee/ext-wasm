@@ -35,11 +35,15 @@ impl Instance {
     ) -> PhpResult<Self> {
         let store = store::new();
         let mut linker: Linker<HostState> = Linker::new(engine());
-        if let Some(wasi) = wasi {
-            wasi.attach(&store)?;
-            wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(link_error)?;
-        }
         imports::link(&store, &mut linker, component, imports)?;
+        if let Some(wasi) = wasi {
+            wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(link_error)?;
+            // The context builds only once, so it is taken after linking succeeded.
+            linker
+                .instantiate_pre(&component.inner)
+                .map_err(link_error)?;
+            wasi.attach(&store)?;
+        }
         let exports = store.with(|mut ctx| {
             let instance = match linker.instantiate(&mut ctx, &component.inner) {
                 Ok(instance) => instance,

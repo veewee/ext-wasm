@@ -55,6 +55,8 @@ final class ComponentCallTest extends TestCase
             (export "add-numbers" (func $add))
             (export "get-URL" (func $add))
             (export "v2-parse" (func $add))
+            (export "next" (func $add))
+            (export "current" (func $add))
             (instance $math (export "add" (func $add)))
             (export "docs:demo/math@0.1.0" (instance $math)))
             WAT);
@@ -175,5 +177,33 @@ final class ComponentCallTest extends TestCase
     {
         $this->expectException(\ArgumentCountError::class);
         self::exports()->addNumbers(1);
+    }
+
+    public function test_functions_named_like_iterator_methods_are_callable(): void
+    {
+        $exports = self::exports();
+
+        self::assertSame(3, $exports->next(1, 2));
+        self::assertSame(5, $exports->current(2, 3));
+    }
+
+    public function test_named_arguments_are_rejected(): void
+    {
+        $this->expectException(\Error::class);
+        $this->expectExceptionMessage('named arguments');
+        self::exports()->addNumbers(b: 2, a: 1);
+    }
+
+    public function test_a_float_out_of_f32_range_is_a_value_error(): void
+    {
+        $this->expectException(\ValueError::class);
+        self::exports()->idF32(1e300);
+    }
+
+    public function test_type_errors_name_the_expected_php_type(): void
+    {
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('expected string for string');
+        self::exports()->echo([]);
     }
 }

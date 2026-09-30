@@ -131,7 +131,14 @@ pub fn to_val(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
         // PHP has no unsigned 64-bit integer, so the bit pattern carries over, as
         // with unpack('J') and core i64.
         Type::U64 => Val::U64(int(value, ty)? as u64),
-        Type::Float32 => Val::Float32(float(value, ty)? as f32),
+        Type::Float32 => {
+            let n = float(value, ty)?;
+            let narrowed = n as f32;
+            if n.is_finite() && narrowed.is_infinite() {
+                return Err(ConvertError::Value(format!("{n} is out of range for f32")));
+            }
+            Val::Float32(narrowed)
+        }
         Type::Float64 => Val::Float64(float(value, ty)?),
         Type::Char => {
             let text = utf8(value, ty)?;
@@ -429,8 +436,10 @@ pub fn install_comparison() {
         |handlers: &ext_php_rs::zend::ZendObjectHandlers,
          compare: unsafe extern "C" fn(*mut Zval, *mut Zval) -> std::ffi::c_int| {
             let handlers = std::ptr::from_ref(handlers).cast_mut();
-            // SAFETY: the handlers live for the whole process, and this runs once,
-            // at the first request startup, before any object of these classes exists.
+            // SAFETY: ext-php-rs hands out the handlers from a OnceCell that
+            // lives for the whole process and has no other writer. This runs
+            // once, at the first request startup, before any object of these
+            // classes exists, so nothing reads the field while it changes.
             unsafe { (*handlers).compare = Some(compare) };
         };
     install(Variant::get_metadata().handlers(), compare::<Variant>);
@@ -476,6 +485,8 @@ unsafe extern "C" fn compare<T: RegisteredClass + SameValue>(
     unsafe { zend_compare(&raw mut x, &raw mut y) }
 }
 
+// zend_compare is ZEND_FASTCALL, which is the C calling convention on the
+// 64-bit targets the extension is built for.
 unsafe extern "C" {
     fn zend_std_compare_objects(a: *mut Zval, b: *mut Zval) -> std::ffi::c_int;
     fn zend_compare(a: *mut Zval, b: *mut Zval) -> std::ffi::c_int;
@@ -517,7 +528,7 @@ fn list_array<'a>(value: &'a Zval, ty: &Type) -> Result<&'a ZendHashTable, Conve
         .filter(|items| items.has_sequential_keys())
         .ok_or_else(|| {
             ConvertError::Type(format!(
-                "expected a list array for {}, got {}",
+                "expected list array for {}, got {}",
                 wit_type(ty),
                 debug_type(value)
             ))
@@ -532,7 +543,7 @@ fn assoc_array<'a>(
 ) -> Result<&'a ZendHashTable, ConvertError> {
     let table = value.array().ok_or_else(|| {
         ConvertError::Type(format!(
-            "expected an array for {}, got {}",
+            "expected array for {}, got {}",
             wit_type(ty),
             debug_type(value)
         ))
@@ -575,7 +586,12 @@ fn php_type(ty: &Type) -> &'static str {
     match ty {
         Type::Bool => "bool",
         Type::Float32 | Type::Float64 => "int|float",
-        Type::Char | Type::String => "string",
+        Type::Char | Type::String | Type::Enum(_) => "string",
+        Type::List(list) if matches!(list.ty(), Type::U8) => "string",
+        Type::List(_) | Type::Tuple(_) => "list array",
+        Type::Record(_) | Type::Flags(_) => "array",
+        Type::Variant(_) | Type::Option(_) => "Wasm\\Component\\Variant",
+        Type::Result(_) => "Wasm\\Component\\Result",
         _ => "int",
     }
 }

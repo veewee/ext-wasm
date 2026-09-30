@@ -187,7 +187,7 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 | `s8` to `s64`, `u8` to `u32` | `int`, range-checked |
 | `u64` | `int`; values above `PHP_INT_MAX` keep their bits and come out negative, as with `unpack('J')` |
 | `f32`, `f64` | `float`, also accepting `int` |
-| `list<u8>` | binary string |
+| `list<u8>` | binary string; every byte crosses as a value of its own, and about 4 MB exceeds wasmtime's copy limit for one call |
 | `list<T>`, `tuple<...>` | list array |
 | `record` | array with camelCase keys; `option` fields may be left out |
 | `flags` | array of camelCase names to `bool` |

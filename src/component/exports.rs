@@ -2,7 +2,7 @@ use ext_php_rs::convert::IntoZval;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::{ZendHashTable, Zval};
+use ext_php_rs::types::{ArrayKey, ZendHashTable, Zval};
 use ext_php_rs::zend::ce;
 use wasmtime::component::types::{ComponentExtern, ComponentItem};
 use wasmtime::component::{ComponentExportIndex, Instance};
@@ -22,10 +22,9 @@ use crate::value::downcast;
 #[php_class]
 #[php(name = "Wasm\\Component\\Exports")]
 #[php(flags = ClassFlags::Final)]
-#[php(implements(ce = ce::iterator, stub = "\\Iterator"))]
+#[php(implements(ce = ce::aggregate, stub = "\\IteratorAggregate"))]
 pub struct Exports {
     entries: Vec<(String, Zval)>,
-    position: usize,
 }
 
 impl Exports {
@@ -61,10 +60,7 @@ impl Exports {
             };
             entries.push((name.to_string(), object));
         }
-        Ok(Self {
-            entries,
-            position: 0,
-        })
+        Ok(Self { entries })
     }
 
     pub fn interface(&self, name: &str) -> Option<&Exports> {
@@ -107,10 +103,47 @@ impl Exports {
             .find(|(export, _)| camel(export) == name)
             .map(|(_, func)| func)
             .ok_or_else(|| error(format!("component has no function named \"{name}\"")))?;
+        // PHP collects named arguments under their names, which say nothing
+        // about the WIT parameter order.
+        if arguments
+            .iter()
+            .any(|(key, _)| !matches!(key, ArrayKey::Long(_)))
+        {
+            return Err(error(
+                "component functions take positional arguments, not named arguments",
+            ));
+        }
         let args: Vec<&Zval> = arguments.values().collect();
         func.call(&args)
     }
 
+    /// Every export by WIT name. An aggregate rather than an Iterator, so WIT
+    /// functions called next or current stay callable as methods.
+    pub fn get_iterator(&self) -> ExportsIterator {
+        ExportsIterator {
+            entries: self
+                .entries
+                .iter()
+                .map(|(name, object)| (name.clone(), object.shallow_clone()))
+                .collect(),
+            position: 0,
+        }
+    }
+}
+
+/// Iterates the exports of a component instance by WIT name.
+#[php_class]
+#[php(name = "Wasm\\Component\\ExportsIterator")]
+#[php(flags = ClassFlags::Final)]
+#[php(implements(ce = ce::iterator, stub = "\\Iterator"))]
+pub struct ExportsIterator {
+    entries: Vec<(String, Zval)>,
+    position: usize,
+}
+
+#[php_impl]
+impl ExportsIterator {
+    /// @return \Wasm\Component\Func|\Wasm\Component\Exports|null
     pub fn current(&self) -> Zval {
         self.entries
             .get(self.position)

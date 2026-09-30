@@ -21,7 +21,7 @@ examples/rust-markdown/build.sh
 
 The script adds the `wasm32-wasip2` target once, builds with size optimisations and copies the result next to `Markdown.php`. That target produces a component directly.
 
-## How the strings get across
+## String transfer between PHP and Rust
 
 `wit/markdown.wit` describes the interface in WIT, the interface language of the component model:
 
@@ -32,5 +32,7 @@ interface render {
 ```
 
 [wit-bindgen](https://github.com/bytecodealliance/wit-bindgen) generates the Rust side from it, and the extension converts PHP strings on the other side, so neither the Rust code nor `Markdown.php` handles memory or pointers. The same works for records, lists, options and results; the main README lists how each WIT type maps to PHP.
+
+A WIT `string` is UTF-8, so `toHtml()` throws a `ValueError` for input in another encoding; convert it first with `mb_convert_encoding()`.
 
 Rust's standard library imports a few WASI interfaces, such as a random seed for its hash maps, so `Markdown.php` passes a `Wasm\Wasi` object. It gives the component no files, environment or arguments.

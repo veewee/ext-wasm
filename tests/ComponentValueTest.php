@@ -313,4 +313,23 @@ final class ComponentValueTest extends TestCase
         self::assertFalse(Result::ok(1) == Result::err(1));
         self::assertNotEquals(Result::ok([1]), Result::ok([2]));
     }
+
+    public function test_type_errors_of_compound_types_name_the_php_type(): void
+    {
+        $exports = self::exports();
+        foreach ([
+            ['idBytes', [1, 2], 'expected string for list<u8>'],
+            ['idList', 'x', 'expected list array for list<u32>'],
+            ['idPerson', 'x', 'expected array for record'],
+            ['idMaybe', 'x', 'expected Wasm\\Component\\Variant for variant'],
+            ['idColor', 1, 'expected string for enum'],
+        ] as [$function, $value, $message]) {
+            try {
+                $exports->{$function}($value);
+                self::fail("Expected a TypeError for $function");
+            } catch (\TypeError $error) {
+                self::assertStringContainsString($message, $error->getMessage());
+            }
+        }
+    }
 }

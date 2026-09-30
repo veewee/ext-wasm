@@ -12,7 +12,6 @@ use Wasm\Exception\LinkError;
 use Wasm\Exception\RuntimeError;
 use Wasm\Wasi;
 
-
 /**
  * tests/fixtures/component-wasi is a Rust command built for wasm32-wasip2;
  * its first argument picks what it does.
@@ -242,5 +241,17 @@ final class ComponentWasiTest extends TestCase
         posix_kill($pid, SIGKILL);
         pcntl_waitpid($pid, $status);
         self::fail('The forked child did not finish its WASI file reads within 20 seconds');
+    }
+
+    public function test_a_link_error_does_not_use_up_the_wasi_object(): void
+    {
+        $wasi = new Wasi(args: ['app']);
+        try {
+            new Instance(new Component('(component (import "missing" (func)))'), wasi: $wasi);
+            self::fail('Expected a LinkError');
+        } catch (LinkError) {
+        }
+
+        self::assertSame(0, self::runCommand($wasi));
     }
 }
