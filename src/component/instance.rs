@@ -7,6 +7,7 @@ use wasmtime::component::Linker;
 
 use crate::component::Component;
 use crate::component::exports::Exports;
+use crate::component::imports;
 use crate::engine::engine;
 use crate::error::link_error;
 use crate::store::{self, HostState};
@@ -24,9 +25,9 @@ pub struct Instance {
 impl Instance {
     /// @param array<string, callable|array<string, callable>>|null $imports
     pub fn __construct(component: &Component, imports: Option<&ZendHashTable>) -> PhpResult<Self> {
-        let _ = imports;
         let store = store::new();
-        let linker: Linker<HostState> = Linker::new(engine());
+        let mut linker: Linker<HostState> = Linker::new(engine());
+        imports::link(&store, &mut linker, component, imports)?;
         let exports = store.with(|mut ctx| {
             let instance = match linker.instantiate(&mut ctx, &component.inner) {
                 Ok(instance) => instance,

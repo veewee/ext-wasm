@@ -153,12 +153,12 @@ impl Values {
 /// as some wasm object in it does.
 pub struct StoreHandle {
     store: RefCell<Store<HostState>>,
-    /// The caller of the host function that is currently running PHP code.
+    /// The store access of the host function that is currently running PHP code.
     ///
     /// While wasm runs, the outer call holds the `RefCell` borrow, so a PHP
     /// callback that touches any wasm object (calling another export, reading
-    /// memory) must go through the caller wasmtime handed to the host function.
-    active: Cell<*mut Caller<'static, HostState>>,
+    /// memory) must go through what wasmtime handed to the host function.
+    active: Cell<Active>,
     /// Set while an async call waits outside wasm for its PHP callback. Its
     /// wasm frames are then off the activation list that wasmtime's GC walks,
     /// so nothing that can run the GC may touch the store: see `busy`.
@@ -171,6 +171,15 @@ pub struct StoreHandle {
 }
 
 pub type SharedStore = Rc<StoreHandle>;
+
+/// What a running host function received from wasmtime: a core function gets
+/// a `Caller`, a component function a `StoreContextMut`.
+#[derive(Clone, Copy)]
+enum Active {
+    None,
+    Core(*mut Caller<'static, HostState>),
+    Component(*mut StoreContextMut<'static, HostState>),
+}
 
 thread_local! {
     static STANDALONE: RefCell<Weak<StoreHandle>> = const { RefCell::new(Weak::new()) };
@@ -216,7 +225,7 @@ pub fn new() -> SharedStore {
                 ..HostState::default()
             },
         )),
-        active: Cell::new(std::ptr::null_mut()),
+        active: Cell::new(Active::None),
         parked: Cell::new(false),
         request: RefCell::new(None),
         response: RefCell::new(None),
@@ -294,9 +303,17 @@ impl StoreHandle {
     /// when it returns, so PHP values held by wasm only stay alive as long as
     /// wasm itself references them.
     pub fn with<R>(&self, f: impl FnOnce(StoreContextMut<'_, HostState>) -> R) -> R {
-        let active = self.active.get();
-        if !active.is_null() {
-            // SAFETY: `active` is only non-null inside `enter_host`, or while
+        match self.active.get() {
+            Active::None => {}
+            Active::Component(ctx) => {
+                // SAFETY: only set inside `enter_component`, which keeps the
+                // context alive for the duration and restores the previous
+                // value before returning. The outer borrow waits inside
+                // wasmtime's call meanwhile.
+                let mut scope = RootScope::new(unsafe { &mut *ctx });
+                return f(scope.as_context_mut());
+            }
+            // SAFETY: `Core` is only set inside `enter_host`, or while
             // `park` holds the caller of a parked async call, which stays at a
             // stable address inside wasmtime's pinned future. Both restore the
             // previous value when they end. No other reference to the store is
@@ -309,8 +326,10 @@ impl StoreHandle {
             // thread-local activations on suspend (runtime/fiber.rs), and on
             // `busy` keeping out everything that enters wasm or can run the GC.
             // Check this again whenever wasmtime is upgraded.
-            let mut scope = RootScope::new(unsafe { &mut *active });
-            return f(scope.as_context_mut());
+            Active::Core(caller) => {
+                let mut scope = RootScope::new(unsafe { &mut *caller });
+                return f(scope.as_context_mut());
+            }
         }
 
         let result = {
@@ -326,7 +345,21 @@ impl StoreHandle {
     pub fn enter_host<R>(&self, caller: &mut Caller<'_, HostState>, f: impl FnOnce() -> R) -> R {
         let previous = self
             .active
-            .replace((caller as *mut Caller<'_, HostState>).cast());
+            .replace(Active::Core((caller as *mut Caller<'_, HostState>).cast()));
+        let _restore = Restore(&self.active, previous);
+        f()
+    }
+
+    /// Runs PHP code from inside a component host function, routing store
+    /// access through `ctx`.
+    pub fn enter_component<R>(
+        &self,
+        ctx: &mut StoreContextMut<'_, HostState>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let previous = self.active.replace(Active::Component(
+            (ctx as *mut StoreContextMut<'_, HostState>).cast(),
+        ));
         let _restore = Restore(&self.active, previous);
         f()
     }
@@ -334,7 +367,7 @@ impl StoreHandle {
     /// Routes store access through the caller of a parked async call until
     /// the guard drops.
     pub fn park(&self, caller: *mut Caller<'static, HostState>) -> Parked<'_> {
-        let previous = self.active.replace(caller);
+        let previous = self.active.replace(Active::Core(caller));
         self.parked.set(true);
         Parked(self, previous)
     }
@@ -404,10 +437,7 @@ impl StoreHandle {
     }
 }
 
-struct Restore<'a>(
-    &'a Cell<*mut Caller<'static, HostState>>,
-    *mut Caller<'static, HostState>,
-);
+struct Restore<'a>(&'a Cell<Active>, Active);
 
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
@@ -415,7 +445,7 @@ impl Drop for Restore<'_> {
     }
 }
 
-pub struct Parked<'a>(&'a StoreHandle, *mut Caller<'static, HostState>);
+pub struct Parked<'a>(&'a StoreHandle, Active);
 
 impl Drop for Parked<'_> {
     fn drop(&mut self) {
