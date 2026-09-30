@@ -127,12 +127,13 @@ final class Keyboard
     /**
      * Parses kitty keyboard protocol events: CSI code[;modifiers[:event]] u, or
      * with a letter instead of u for arrows. Event 1 is a press, 2 a repeat, 3 a release.
+     * An arrow press without modifiers comes without numbers at all, as CSI A.
      *
      * @return list<array{string, string}>
      */
     private function kittyKeys(string $input): array
     {
-        preg_match_all('/\e\[(\d+)(?::\d*)*(?:;(\d+)(?::(\d+))?)?([uABCD~])/', $input, $matches, PREG_SET_ORDER);
+        preg_match_all('/\e\[(\d*)(?::\d*)*(?:;(\d+)(?::(\d+))?)?([uABCD~])/', $input, $matches, PREG_SET_ORDER);
         $keys = [];
         foreach ($matches as $match) {
             [, $code, $modifiers, $event, $final] = $match + ['', '', '1', '1', ''];
