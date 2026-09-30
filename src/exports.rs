@@ -43,6 +43,17 @@ impl Exports {
         })
     }
 
+    pub fn store(&self) -> &SharedStore {
+        &self.store
+    }
+
+    pub fn func(&self, name: &str) -> Option<wasmtime::Func> {
+        self.entries.iter().find_map(|(export, ext, _)| match ext {
+            Extern::Func(func) if export == name => Some(*func),
+            _ => None,
+        })
+    }
+
     fn find(&self, name: &str) -> PhpResult<&(String, Extern, Zval)> {
         self.entries
             .iter()

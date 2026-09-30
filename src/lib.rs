@@ -16,6 +16,7 @@ mod table;
 mod tag;
 mod throw;
 mod value;
+mod wasi;
 
 use ext_php_rs::flags::IniEntryPermission;
 use ext_php_rs::prelude::*;
@@ -87,6 +88,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<throw::WasmThrow>()
         .class::<module::Module>()
         .class::<store::StoreObject>()
+        .class::<wasi::Wasi>()
         .class::<func::Func>()
         .class::<global::GlobalVar>()
         .class::<memory::Memory>()

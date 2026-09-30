@@ -231,6 +231,12 @@ fn to_wasm(
 /// The thrown exception of a failed call: a `WasmThrow` for wasm exceptions,
 /// a `RuntimeError` for traps.
 pub fn call_error(ctx: &mut StoreContextMut<'_, HostState>, err: wasmtime::Error) -> PhpException {
+    if let Some(exit) = err.downcast_ref::<wasmtime_wasi::I32Exit>() {
+        return crate::error::runtime_error(wasmtime::Error::msg(format!(
+            "wasm program exited with code {}",
+            exit.0
+        )));
+    }
     if err.is::<wasmtime::ThrownException>()
         && let Some(exception) = ctx.take_pending_exception()
     {

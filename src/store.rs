@@ -18,7 +18,14 @@ pub struct HostState {
     pub tags: Vec<KnownTag>,
     /// The handle that owns this store. Weak, because the handle owns the store.
     handle: Weak<StoreHandle>,
+    /// The WASI context of a store created by `Wasm\Wasi`.
+    pub wasi: Option<wasmtime_wasi::p1::WasiP1Ctx>,
 }
+
+// SAFETY: wasmtime-wasi requires Send store data. A store is created, used and
+// dropped on one PHP thread and never handed to another, so the Rc and raw
+// pointers inside are never touched from two threads.
+unsafe impl Send for HostState {}
 
 /// A tag's PHP object, held without a reference.
 ///

@@ -267,6 +267,48 @@ namespace Wasm {
     }
 
     /**
+     * A WASI preview1 environment for one run of one module, like Node's `WASI`.
+     *
+     * Nothing of the host is visible to the module except what is passed here:
+     * no environment, no stdio and no files outside the preopened directories.
+     * stdout and stderr are captured and read after the run.
+     */
+    class Wasi {
+        /**
+         * @param list<string>|null $args argv, including the program name
+         * @param array<string, string>|null $env
+         * @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
+         * @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
+         *
+         * @param string|null $stdin
+         */
+        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null) {}
+
+        /**
+         * @return array{wasi_snapshot_preview1: array<string, \Wasm\Func>}
+         */
+        public function getImportObject(): array {}
+
+        /**
+         * Runs `_start` and returns the exit code.
+         *
+         * @param \Wasm\Instance $instance
+         * @return int
+         */
+        public function start(\Wasm\Instance $instance): int {}
+
+        /**
+         * @return string
+         */
+        public function stderr(): string {}
+
+        /**
+         * @return string
+         */
+        public function stdout(): string {}
+    }
+
+    /**
      * @param string $bytes
      * @return \Wasm\Module
      */

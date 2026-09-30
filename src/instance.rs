@@ -11,6 +11,7 @@ use crate::imports;
 use crate::module::Module;
 use crate::store::{self, StoreObject};
 use crate::throw::call_error;
+use crate::value::downcast;
 
 #[php_class]
 #[php(name = "Wasm\\Instance")]
@@ -51,5 +52,11 @@ impl Instance {
     #[php(getter)]
     pub fn get_exports(&self) -> Zval {
         self.exports.shallow_clone()
+    }
+}
+
+impl Instance {
+    pub fn exports_object(&self) -> &Exports {
+        downcast::<Exports>(&self.exports).expect("an instance always holds its Exports")
     }
 }
