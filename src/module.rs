@@ -80,7 +80,15 @@ impl Module {
         let binary = wat::parse_bytes(bytes).map_err(compile_error)?;
         let inner = compile_in_process_pool(|| wasmtime::Module::from_binary(engine(), &binary))
             .map_err(compile_error)?
-            .map_err(compile_error)?;
+            .map_err(|err| {
+                if wasmparser::Parser::is_component(&binary) {
+                    compile_error(format!(
+                        "{err:#} (this is a component, use Wasm\\Component\\Component)"
+                    ))
+                } else {
+                    compile_error(err)
+                }
+            })?;
         Ok(Self {
             inner,
             custom_sections: custom_sections(&binary),
@@ -102,7 +110,7 @@ unsafe extern "C" {
 /// Reads a file the way PHP's own file functions find it: relative to PHP's
 /// working directory, which differs from the process one in ZTS builds, and
 /// only inside open_basedir.
-fn read_local_file(path: &str) -> PhpResult<Vec<u8>> {
+pub(crate) fn read_local_file(path: &str) -> PhpResult<Vec<u8>> {
     let fail = |reason: &str| wasm_exception(format!("cannot read {path}: {reason}"));
     let c_path = CString::new(path).map_err(|_| fail("the path contains a NUL byte"))?;
     // SAFETY: `c_path` is a valid C string; PHP returns an emalloc'd copy or null.
@@ -123,10 +131,12 @@ fn read_local_file(path: &str) -> PhpResult<Vec<u8>> {
     std::fs::read(absolute).map_err(|err| fail(&err.to_string()))
 }
 
+/// Whether `bytes` is a valid module or component, binary or WAT.
 pub fn validate(bytes: &[u8]) -> bool {
     wat::parse_bytes(bytes).is_ok_and(|binary| {
-        compile_in_process_pool(|| wasmtime::Module::validate(engine(), &binary))
-            .is_ok_and(|valid| valid.is_ok())
+        crate::component::validate(&binary)
+            || compile_in_process_pool(|| wasmtime::Module::validate(engine(), &binary))
+                .is_ok_and(|valid| valid.is_ok())
     })
 }
 

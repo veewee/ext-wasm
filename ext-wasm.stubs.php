@@ -368,6 +368,42 @@ namespace Wasm {
     function validate(string $bytes): bool {}
 }
 
+namespace Wasm\Component {
+    /**
+     * A compiled WebAssembly component.
+     *
+     * Compile once and instantiate as often as needed, like `Wasm\Module`.
+     */
+    class Component {
+        /**
+         * Compiles a component binary or WAT text.
+         *
+         * @param string $bytes
+         */
+        public function __construct(string $bytes) {}
+
+        /**
+         * @return list<array{name: string, kind: string, type?: string, functions?: list<array{name: string, kind: string, type?: string}>}>
+         */
+        public function exports(): array {}
+
+        /**
+         * Compiles a component file, like `new Component(file_get_contents($path))`.
+         *
+         * Reads local files only and honours open_basedir.
+         *
+         * @param string $path
+         * @return \Wasm\Component\Component
+         */
+        public static function fromFile(string $path): \Wasm\Component\Component {}
+
+        /**
+         * @return list<array{name: string, kind: string, type?: string, functions?: list<array{name: string, kind: string, type?: string}>}>
+         */
+        public function imports(): array {}
+    }
+}
+
 namespace Wasm\Exception {
     class CompileError extends \Wasm\Exception\WasmException {
         /**
