@@ -1,6 +1,6 @@
 # Rust code in PHP
 
-This example shows how to write part of a PHP application in Rust. `src/lib.rs` is a few lines of Rust around [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark), a fast CommonMark parser, compiled to a 200 KB wasm module with no imports. `Markdown.php` loads it and turns Markdown into HTML.
+This example shows how to write part of a PHP application in Rust. `src/lib.rs` is a few lines of Rust around [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark), a fast CommonMark parser, built as a WebAssembly component. `Markdown.php` loads it and turns Markdown into HTML with one call that takes and returns a PHP string.
 
 ## Running it
 
@@ -13,21 +13,24 @@ php examples/rust-markdown/render.php < README.md
 
 ## Changing the Rust code
 
-Install Rust from [rustup.rs](https://rustup.rs), edit `src/lib.rs` and rebuild the module:
+Install Rust from [rustup.rs](https://rustup.rs), edit `src/lib.rs` and rebuild the component:
 
 ```sh
 examples/rust-markdown/build.sh
 ```
 
-The script adds the `wasm32-unknown-unknown` target once, builds with size optimisations and copies the result next to `Markdown.php`.
+The script adds the `wasm32-wasip2` target once, builds with size optimisations and copies the result next to `Markdown.php`. That target produces a component directly.
 
-## Passing strings between PHP and Rust
+## How the strings get across
 
-wasm functions only take and return numbers, so strings travel through the module's memory:
+`wit/markdown.wit` describes the interface in WIT, the interface language of the component model:
 
-1. PHP calls `alloc(length)`, which reserves room in the module's memory and returns its address.
-2. PHP writes the Markdown there with `$memory->write()` and calls `render(address, length)`.
-3. Rust renders into a new buffer and returns its address and length packed into one 64-bit integer.
-4. PHP reads the HTML with `$memory->read()` and frees both buffers with `dealloc()`.
+```wit
+interface render {
+    render: func(markdown: string) -> string;
+}
+```
 
-The same pattern works for any Rust function that takes and returns strings or bytes, for example JSON in and JSON out. A 90 KB document renders in about 3 ms on an Apple M-series machine.
+[wit-bindgen](https://github.com/bytecodealliance/wit-bindgen) generates the Rust side from it, and the extension converts PHP strings on the other side, so neither the Rust code nor `Markdown.php` handles memory or pointers. The same works for records, lists, options and results; the main README lists how each WIT type maps to PHP.
+
+Rust's standard library imports a few WASI interfaces, such as a random seed for its hash maps, so `Markdown.php` passes a `Wasm\Wasi` object. It gives the component no files, environment or arguments.

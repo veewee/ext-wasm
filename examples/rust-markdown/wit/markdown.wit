@@ -1,0 +1,10 @@
+package docs:markdown@0.1.0;
+
+interface render {
+    /// CommonMark with tables, strikethrough and task lists, as HTML.
+    render: func(markdown: string) -> string;
+}
+
+world renderer {
+    export render;
+}
