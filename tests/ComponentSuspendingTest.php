@@ -42,6 +42,27 @@ final class ComponentSuspendingTest extends TestCase
           (func (export "id") (param "n" u32) (result u32) (canon lift (core func $i "id"))))
         WAT;
 
+    /** Exports a resource thing whose constructor awaits later(); value() gives what it returned. */
+    private const RESOURCES = <<<'WAT'
+        (component
+          (import "later" (func $later (result u32)))
+          (core func $later-core (canon lower (func $later)))
+          (type $thing' (resource (rep i32)))
+          (core func $new (canon resource.new $thing'))
+          (core module $m
+            (import "host" "new" (func $new (param i32) (result i32)))
+            (import "host" "later" (func $later (result i32)))
+            (func (export "ctor") (result i32) (call $new (call $later)))
+            ;; A borrow of a resource the component defines arrives as its representation.
+            (func (export "value") (param i32) (result i32) (local.get 0)))
+          (core instance $i (instantiate $m (with "host" (instance
+            (export "new" (func $new))
+            (export "later" (func $later-core))))))
+          (export $thing "thing" (type $thing'))
+          (func (export "[constructor]thing") (result (own $thing)) (canon lift (core func $i "ctor")))
+          (func (export "[method]thing.value") (param "self" (borrow $thing)) (result u32) (canon lift (core func $i "value"))))
+        WAT;
+
     /** @param array<string, mixed> $imports */
     private static function exports(array $imports): Exports
     {
@@ -225,25 +246,7 @@ final class ComponentSuspendingTest extends TestCase
 
     public function test_resources_work_in_an_async_instance(): void
     {
-        $component = new Component(<<<'WAT'
-            (component
-              (import "later" (func $later (result u32)))
-              (core func $later-core (canon lower (func $later)))
-              (type $thing' (resource (rep i32)))
-              (core func $new (canon resource.new $thing'))
-              (core module $m
-                (import "host" "new" (func $new (param i32) (result i32)))
-                (import "host" "later" (func $later (result i32)))
-                (func (export "ctor") (result i32) (call $new (call $later)))
-                ;; A borrow of a resource the component defines arrives as its representation.
-                (func (export "value") (param i32) (result i32) (local.get 0)))
-              (core instance $i (instantiate $m (with "host" (instance
-                (export "new" (func $new))
-                (export "later" (func $later-core))))))
-              (export $thing "thing" (type $thing'))
-              (func (export "[constructor]thing") (result (own $thing)) (canon lift (core func $i "ctor")))
-              (func (export "[method]thing.value") (param "self" (borrow $thing)) (result u32) (canon lift (core func $i "value"))))
-            WAT);
+        $component = new Component(self::RESOURCES);
         $exports = (new Instance($component, ['later' => new Suspending(fn (): int => \Fiber::suspend())]))->exports;
 
         $fiber = new \Fiber(fn () => $exports->get('thing')->new());
@@ -311,5 +314,66 @@ final class ComponentSuspendingTest extends TestCase
         }
         $fiber->resume(3);
         self::assertSame(3, $fiber->getReturn());
+    }
+
+    public function test_resource_functions_of_a_parked_instance_are_busy(): void
+    {
+        $exports = (new Instance(new Component(self::RESOURCES), ['later' => new Suspending(fn (): int => \Fiber::suspend())]))->exports;
+        $ready = new \Fiber(fn () => $exports->get('thing')->new());
+        $ready->start();
+        $ready->resume(1);
+        $thing = $ready->getReturn();
+        $waiting = new \Fiber(fn () => $exports->get('thing')->new());
+        $waiting->start();
+
+        foreach ([fn () => $exports->get('thing')->new(), fn () => $thing->value()] as $call) {
+            try {
+                $call();
+                self::fail('Expected the store to be busy');
+            } catch (RuntimeError $busy) {
+                self::assertSame('the store is busy with a suspended call', $busy->getMessage());
+            }
+        }
+
+        // Dropped while the other call waits: released once the store is free again.
+        $thing->drop();
+        $waiting->resume(2);
+        self::assertSame(2, $waiting->getReturn()->value());
+    }
+
+    public function test_wasi_components_resumed_out_of_order_do_not_panic(): void
+    {
+        $script = <<<'PHP'
+            <?php
+            $component = new Wasm\Component\Component('(component
+              (import "wasi:clocks/monotonic-clock@0.2.0" (instance $clock (export "now" (func (result u64)))))
+              (alias export $clock "now" (func $now))
+              (import "later" (func $later (result u32)))
+              (core func $now-core (canon lower (func $now)))
+              (core func $later-core (canon lower (func $later)))
+              (core module $m
+                (import "host" "now" (func $now (result i64)))
+                (import "host" "later" (func $later (result i32)))
+                (func (export "run") (result i32) (drop (call $now)) (call $later)))
+              (core instance $i (instantiate $m (with "host" (instance
+                (export "now" (func $now-core)) (export "later" (func $later-core))))))
+              (func (export "run") (result u32) (canon lift (core func $i "run"))))');
+            $fibers = [];
+            foreach (['a', 'b'] as $name) {
+                $exports = (new Wasm\Component\Instance($component, [
+                    'later' => new Wasm\Suspending(fn (): int => Fiber::suspend()),
+                ], new Wasm\Wasi()))->exports;
+                $fibers[$name] = new Fiber(fn (): int => $exports->run());
+                $fibers[$name]->start();
+            }
+            $fibers['a']->resume(1);
+            $fibers['b']->resume(2);
+            echo $fibers['a']->getReturn(), ',', $fibers['b']->getReturn();
+            PHP;
+
+        $output = $this->runPhp($script, $exitCode);
+
+        self::assertSame(0, $exitCode, $output);
+        self::assertSame('1,2', $output);
     }
 }
