@@ -58,6 +58,75 @@ final class WasiTest extends TestCase
         self::assertSame(9, $wasi->start($instance));
     }
 
+    public function test_args_reach_the_module(): void
+    {
+        $wasi = new Wasi(args: ['prog', '--flag']);
+        $wasi->start($this->instance($wasi, <<<'EOWAT'
+            (func (export "_start")
+              (drop (call $args_sizes_get (i32.const 16) (i32.const 20)))
+              (drop (call $args_get (i32.const 2048) (i32.const 1024)))
+              (call $write (i32.const 1) (i32.const 1024) (i32.load (i32.const 20))))
+            EOWAT));
+
+        self::assertSame("prog\0--flag\0", $wasi->stdout());
+    }
+
+    public function test_env_is_empty_unless_given(): void
+    {
+        foreach ([[null, ''], [['LANG' => 'C'], "LANG=C\0"]] as [$env, $expected]) {
+            $wasi = new Wasi(env: $env);
+            $wasi->start($this->instance($wasi, <<<'EOWAT'
+                (func (export "_start")
+                  (drop (call $environ_sizes_get (i32.const 16) (i32.const 20)))
+                  (drop (call $environ_get (i32.const 2048) (i32.const 1024)))
+                  (call $write (i32.const 1) (i32.const 1024) (i32.load (i32.const 20))))
+                EOWAT));
+
+            self::assertSame($expected, $wasi->stdout());
+        }
+    }
+
+    public function test_stdin_is_the_given_string(): void
+    {
+        $wasi = new Wasi(stdin: 'hello');
+        $wasi->start($this->instance($wasi, <<<'EOWAT'
+            (func (export "_start")
+              (call $write (i32.const 1) (i32.const 1024) (call $read (i32.const 0) (i32.const 1024) (i32.const 1024))))
+            EOWAT));
+
+        self::assertSame('hello', $wasi->stdout());
+    }
+
+    public function test_output_up_to_the_limit_is_kept(): void
+    {
+        $wasi = new Wasi(outputLimit: 1024);
+
+        self::assertSame(0, $wasi->start($this->instance($wasi, '(func (export "_start") (call $write (i32.const 1) (i32.const 1024) (i32.const 1024)))')));
+        self::assertSame(1024, strlen($wasi->stdout()));
+    }
+
+    /** @return iterable<string, array{int}> */
+    public static function outputStreams(): iterable
+    {
+        yield 'stdout' => [1];
+        yield 'stderr' => [2];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('outputStreams')]
+    public function test_output_past_the_limit_is_a_runtime_error(int $fd): void
+    {
+        $wasi = new Wasi(outputLimit: 100);
+        $instance = $this->instance($wasi, "(func (export \"_start\") (call \$write (i32.const {$fd}) (i32.const 1024) (i32.const 1024)))");
+
+        try {
+            $wasi->start($instance);
+            self::fail('Expected a RuntimeError');
+        } catch (\Wasm\Exception\RuntimeError $error) {
+            self::assertStringContainsString('exceeded the limit of 100 bytes', $error->getMessage());
+        }
+        self::assertSame(100, strlen($fd === 1 ? $wasi->stdout() : $wasi->stderr()));
+    }
+
     private function instance(Wasi $wasi, string $body): Instance
     {
         return new Instance(new Module(self::module($body)), $wasi->getImportObject());
