@@ -5,7 +5,7 @@ use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::ZendHashTable;
 
-use crate::engine::engine;
+use crate::engine::{compile_in_process_pool, engine};
 use crate::error::compile_error;
 use crate::imports::kind;
 
@@ -67,7 +67,8 @@ impl Module {
 impl Module {
     pub fn compile(bytes: &[u8]) -> PhpResult<Self> {
         let binary = wat::parse_bytes(bytes).map_err(compile_error)?;
-        let inner = wasmtime::Module::from_binary(engine(), &binary).map_err(compile_error)?;
+        let inner = compile_in_process_pool(|| wasmtime::Module::from_binary(engine(), &binary))
+            .map_err(compile_error)?;
         Ok(Self {
             inner,
             custom_sections: custom_sections(&binary),
@@ -76,8 +77,9 @@ impl Module {
 }
 
 pub fn validate(bytes: &[u8]) -> bool {
-    wat::parse_bytes(bytes)
-        .is_ok_and(|binary| wasmtime::Module::validate(engine(), &binary).is_ok())
+    wat::parse_bytes(bytes).is_ok_and(|binary| {
+        compile_in_process_pool(|| wasmtime::Module::validate(engine(), &binary)).is_ok()
+    })
 }
 
 fn custom_sections(binary: &[u8]) -> Vec<(String, Vec<u8>)> {
