@@ -6,6 +6,7 @@
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::types::{ZendHashTable, Zval};
@@ -41,7 +42,10 @@ impl TcpRule {
                 "must be ASCII; write an international domain in punycode (xn--)",
             ));
         }
-        if entry.is_empty() || entry.contains("://") || entry.contains(char::is_whitespace) {
+        if entry.is_empty()
+            || entry.contains("://")
+            || entry.contains(|c: char| c.is_whitespace() || c.is_control())
+        {
             return Err(invalid(SHAPE));
         }
         let (rest, any_port) = match entry.strip_suffix(":*") {
@@ -66,32 +70,35 @@ impl TcpRule {
                     .ok()
                     .filter(|&prefix| prefix <= bits)
                     .ok_or_else(|| invalid("has an invalid network prefix"))?;
-                Target::Network(address.to_canonical(), prefix)
+                match address.to_canonical() {
+                    // Connect addresses are canonicalised too, so an IPv4-mapped
+                    // network is the IPv4 network in its last 32 bits; a shorter
+                    // prefix would span IPv6 addresses as well.
+                    IpAddr::V4(v4) if address.is_ipv6() => match prefix.checked_sub(96) {
+                        Some(prefix) => Target::Network(IpAddr::V4(v4), prefix),
+                        None => {
+                            return Err(invalid(
+                                "has a network prefix below 96 for an IPv4-mapped address",
+                            ));
+                        }
+                    },
+                    canonical => Target::Network(canonical, prefix),
+                }
             }
             None => match host.parse::<IpAddr>() {
                 Ok(address) => {
                     let address = address.to_canonical();
                     Target::Network(address, if address.is_ipv4() { 32 } else { 128 })
                 }
-                Err(_) if !host.is_empty() && !host.contains('*') => Target::Name(host),
+                Err(_) if is_hostname(&host) => Target::Name(host),
                 Err(_) => return Err(invalid(SHAPE)),
             },
         };
         Ok(Self { target, port })
     }
 
-    /// Whether a connect to `address` is allowed, resolving a name rule now.
-    async fn allows(&self, address: SocketAddr) -> bool {
-        if self.port.is_some_and(|port| port != address.port()) {
-            return false;
-        }
-        let ip = address.ip().to_canonical();
-        match &self.target {
-            Target::Network(network, prefix) => contains(*network, *prefix, ip),
-            Target::Name(name) => resolve(name.clone())
-                .await
-                .is_some_and(|addresses| addresses.contains(&ip)),
-        }
+    fn port_matches(&self, address: SocketAddr) -> bool {
+        self.port.is_none_or(|port| port == address.port())
     }
 
     fn is_name(&self) -> bool {
@@ -99,8 +106,24 @@ impl TcpRule {
     }
 }
 
+/// Not empty, no wildcard, and not something libc reads as an IPv4 address
+/// although Rust does not: `127.1`, `10.0.1` or `0x7f.1`, whose last label is
+/// a number.
+fn is_hostname(host: &str) -> bool {
+    let last = host.rsplit('.').next().unwrap_or_default();
+    !host.is_empty()
+        && !host.contains('*')
+        && !last.bytes().all(|b| b.is_ascii_digit())
+        && !last.starts_with("0x")
+}
+
 fn contains(network: IpAddr, prefix: u8, ip: IpAddr) -> bool {
-    let mask = |bits: u32| u128::MAX.checked_shl(bits - u32::from(prefix)).unwrap_or(0);
+    // Saturating, so a prefix beyond the width can only narrow the match.
+    let mask = |bits: u32| {
+        u128::MAX
+            .checked_shl(bits.saturating_sub(u32::from(prefix)))
+            .unwrap_or(0)
+    };
     match (network, ip) {
         (IpAddr::V4(network), IpAddr::V4(ip)) => {
             let mask = mask(32) as u32;
@@ -116,7 +139,8 @@ fn contains(network: IpAddr, prefix: u8, ip: IpAddr) -> bool {
 
 /// Resolves on tokio's blocking pool of the runtime the check is polled on.
 /// Never block_on here: the check already runs inside wasmtime-wasi's block_on.
-async fn resolve(name: String) -> Option<Vec<IpAddr>> {
+/// A lookup that takes longer than `limit` counts as failed.
+async fn resolve(name: String, limit: Option<Duration>) -> Option<Vec<IpAddr>> {
     let lookup = tokio::task::spawn_blocking(move || {
         (name.as_str(), 0).to_socket_addrs().map(|addresses| {
             addresses
@@ -124,7 +148,36 @@ async fn resolve(name: String) -> Option<Vec<IpAddr>> {
                 .collect()
         })
     });
-    lookup.await.ok()?.ok()
+    let result = match limit {
+        Some(limit) => tokio::time::timeout(limit, lookup).await.ok()?,
+        None => lookup.await,
+    };
+    result.ok()?.ok()
+}
+
+/// IP rules first, so a connect they allow waits for no lookup; then each
+/// name rule for this port, resolved now.
+async fn allowed(rules: &[TcpRule], address: SocketAddr, limit: Option<Duration>) -> bool {
+    let ip = address.ip().to_canonical();
+    let candidates = rules.iter().filter(|rule| rule.port_matches(address));
+    let mut names = Vec::new();
+    for rule in candidates {
+        match &rule.target {
+            Target::Network(network, prefix) if contains(*network, *prefix, ip) => return true,
+            Target::Network(..) => {}
+            Target::Name(name) if !names.contains(name) => names.push(name.clone()),
+            Target::Name(_) => {}
+        }
+    }
+    for name in names {
+        if resolve(name, limit)
+            .await
+            .is_some_and(|addresses| addresses.contains(&ip))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Parses the `tcpHosts` constructor argument of `Wasm\Wasi`.
@@ -144,8 +197,9 @@ pub fn parse_hosts(hosts: &ZendHashTable) -> PhpResult<Vec<TcpRule>> {
 }
 
 /// Lets the guest connect to what `rules` allow. Lookups are only turned on
-/// with a name rule, because while on the guest can look up any name.
-pub fn allow(builder: &mut WasiCtxBuilder, rules: Vec<TcpRule>) {
+/// with a name rule, because while on the guest can look up any name. The
+/// host's own lookups for name rules wait at most `lookup_limit`.
+pub fn allow(builder: &mut WasiCtxBuilder, rules: Vec<TcpRule>, lookup_limit: Option<Duration>) {
     let rules: Arc<[TcpRule]> = rules.into();
     builder
         .allow_tcp(true)
@@ -157,14 +211,7 @@ pub fn allow(builder: &mut WasiCtxBuilder, rules: Vec<TcpRule>) {
                 // Every connect binds to the wildcard address first, which an
                 // explicit bind to it cannot be told apart from.
                 SocketAddrUse::TcpBind => address.ip().is_unspecified() && address.port() == 0,
-                SocketAddrUse::TcpConnect => {
-                    for rule in rules.iter() {
-                        if rule.allows(address).await {
-                            return true;
-                        }
-                    }
-                    false
-                }
+                SocketAddrUse::TcpConnect => allowed(&rules, address, lookup_limit).await,
                 _ => false,
             }
         })
@@ -191,6 +238,33 @@ mod tests {
             rule("[fd00::/8]:1").target,
             Target::Network("fd00::".parse().unwrap(), 8)
         );
+    }
+
+    #[test]
+    fn a_mapped_network_becomes_its_ipv4_network() {
+        assert_eq!(
+            TcpRule::parse("[::ffff:10.0.0.0/104]:1").unwrap().target,
+            Target::Network("10.0.0.0".parse().unwrap(), 8)
+        );
+        assert!(
+            TcpRule::parse("[::ffff:0:0/64]:1")
+                .unwrap_err()
+                .contains("prefix")
+        );
+    }
+
+    #[test]
+    fn numbers_libc_would_read_as_addresses_are_not_names() {
+        for entry in ["127.1:80", "10.0.1:80", "0x7f.1:80", "1:80", "a\0b:80"] {
+            assert!(TcpRule::parse(entry).is_err(), "{entry}");
+        }
+        assert!(TcpRule::parse("db1.internal:80").is_ok());
+    }
+
+    #[test]
+    fn a_prefix_beyond_the_width_never_widens_a_match() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert!(!contains(ip("10.0.0.0"), 104, ip("11.0.0.1")));
     }
 
     #[test]

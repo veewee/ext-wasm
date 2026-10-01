@@ -30,9 +30,10 @@ final class ComponentSocketsTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach ($this->servers as [$process]) {
+        foreach ($this->servers as [$process, $log]) {
             proc_terminate($process);
             proc_close($process);
+            @unlink($log);
         }
     }
 
@@ -49,20 +50,12 @@ final class ComponentSocketsTest extends TestCase
     private function echoServer(string $host = '127.0.0.1'): array
     {
         $log = tempnam(sys_get_temp_dir(), 'wasm-echo');
-        $code = <<<'PHP'
-            $server = stream_socket_server('tcp://' . $argv[1] . ':0', $errno, $error) or exit("$error\n");
-            echo parse_url('tcp://' . stream_socket_get_name($server, false), PHP_URL_PORT), "\n";
-            while ($client = stream_socket_accept($server, -1)) {
-                $message = stream_get_contents($client);
-                file_put_contents($argv[2], $message . "\n", FILE_APPEND);
-                fwrite($client, "echo:$message");
-                fclose($client);
-            }
-            PHP;
-        $process = proc_open([PHP_BINARY, '-n', '-r', $code, $host, $log], [1 => ['pipe', 'w']], $pipes);
+        $process = proc_open([PHP_BINARY, '-n', __DIR__ . '/fixtures/echo-server.php', $host, $log], [1 => ['pipe', 'w']], $pipes);
         $port = trim((string) fgets($pipes[1]));
         if (!ctype_digit($port)) {
             proc_terminate($process);
+            proc_close($process);
+            @unlink($log);
             self::markTestSkipped("cannot listen on $host: $port");
         }
         $this->servers[] = [$process, $log];
@@ -132,6 +125,14 @@ final class ComponentSocketsTest extends TestCase
         self::assertSame('', file_get_contents($log));
     }
 
+    public function test_an_ipv4_mapped_network_matches_as_its_ipv4_network(): void
+    {
+        [$port] = $this->echoServer();
+
+        self::assertSame('reply: echo:mapped', self::guest(["[::ffff:127.0.0.0/104]:$port"], 'tcp', "127.0.0.1:$port", 'mapped'));
+        self::assertStringStartsWith('error: PermissionDenied', self::guest(["[::ffff:10.0.0.0/104]:$port"], 'tcp', "127.0.0.1:$port", 'hi'));
+    }
+
     public function test_a_network_with_any_port_matches(): void
     {
         [$port] = $this->echoServer();
@@ -166,6 +167,8 @@ final class ComponentSocketsTest extends TestCase
         yield 'wildcard name' => ['*.example.com:80', \ValueError::class, 'tcpHosts entry "*.example.com:80"'];
         yield 'prefix too long' => ['10.0.0.0/33:1', \ValueError::class, 'tcpHosts entry "10.0.0.0/33:1"'];
         yield 'name with prefix' => ['db/8:1', \ValueError::class, 'tcpHosts entry "db/8:1"'];
+        yield 'number libc reads as an address' => ['10.0.1:6379', \ValueError::class, 'tcpHosts entry "10.0.1:6379"'];
+        yield 'mapped network too wide' => ['[::ffff:0:0/64]:1', \ValueError::class, 'below 96 for an IPv4-mapped address'];
         yield 'not a string' => [5432, \TypeError::class, 'tcpHosts entries must be strings, got int'];
     }
 

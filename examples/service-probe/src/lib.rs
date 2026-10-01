@@ -6,7 +6,7 @@
 //! for the others the component sends one small request per connection and
 //! reads the answer.
 
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -106,11 +106,9 @@ fn connect(address: &SocketAddr, timeout: Duration) -> std::io::Result<TcpStream
 fn read_some(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
     let _ = stream.set_read_timeout(Some(timeout));
     let mut buffer = vec![0; READ_LIMIT];
+    // A timeout and a reset both mean there is nothing to read.
     match stream.read(&mut buffer) {
         Ok(read) => buffer.truncate(read),
-        Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-            buffer.clear()
-        }
         Err(_) => buffer.clear(),
     }
     buffer

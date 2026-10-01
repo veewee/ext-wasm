@@ -88,7 +88,7 @@ impl Wasi {
         // child does not have. Preopens copy this flag, so it is set first.
         builder.allow_blocking_current_thread(true);
         if let Some(rules) = tcp_hosts {
-            sockets::allow(&mut builder, rules);
+            sockets::allow(&mut builder, rules, socket_timeout());
         }
         builder.args(&args.unwrap_or_default());
         for (key, value) in env.map(ZendHashTable::iter).into_iter().flatten() {

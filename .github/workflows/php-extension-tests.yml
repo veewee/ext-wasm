@@ -118,9 +118,13 @@ jobs:
       - name: Build and run the service probe example
         run: |
           examples/service-probe/build.sh
+          trap 'kill $(jobs -p)' EXIT
           php -S 127.0.0.1:18080 -t examples/service-probe > /dev/null 2>&1 &
-          php -r '$s = stream_socket_server("tcp://127.0.0.1:16379"); while ($c = stream_socket_accept($s, -1)) { fgets($c); fwrite($c, "+PONG\r\n"); fclose($c); }' &
-          sleep 1
+          php -r '$s = stream_socket_server("tcp://127.0.0.1:16379"); while ($c = stream_socket_accept($s, -1)) { fgets($c); fwrite($c, "+PONG\r\n"); fclose($c); }' > /dev/null 2>&1 &
+          for _ in $(seq 20); do
+            php -r 'exit(@fsockopen("127.0.0.1", 18080) ? 0 : 1);' && break
+            sleep 0.5
+          done
           php -d "extension=$PWD/target/release/libwasm.so" examples/service-probe/probe.php 127.0.0.1:18080 127.0.0.1:16379 > probe.txt
           cat probe.txt
           grep -q '127.0.0.1:18080 *HTTP' probe.txt
