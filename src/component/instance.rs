@@ -10,7 +10,7 @@ use crate::component::exports::Exports;
 use crate::component::http_handler::{self, Request, Response};
 use crate::component::imports;
 use crate::engine::engine;
-use crate::error::{error, link_error};
+use crate::error::{error, instantiation_error, link_error};
 use crate::store::{self, HostState, SharedStore};
 use crate::suspend;
 use crate::throw::call_error;
@@ -67,7 +67,9 @@ impl Instance {
             let instance = match instantiated {
                 Ok(instance) => instance,
                 Err(err) if err.is::<wasmtime::Trap>() => return Err(call_error(&mut ctx, err)),
-                Err(err) => return Err(link_error(ctx.data_mut().memory.explain(err))),
+                Err(err) => {
+                    return Err(instantiation_error(ctx.data_mut().memory.explain(err)));
+                }
             };
             let ty = component.inner.component_type();
             Exports::new(&store, &mut ctx, &instance, None, ty.exports(engine()))

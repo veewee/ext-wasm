@@ -27,6 +27,8 @@ world async-demo {
     export points: async func() -> stream<point>;
     /// A future that a task spawned by the call writes with slow(n), after the call returned.
     export fire: async func(n: u32) -> future<u32>;
+    /// 0, then a trap in the task writing the stream, after the call returned.
+    export crash-later: async func() -> stream<u32>;
     /// slow(0) to slow(n - 1), each called between two writes.
     export ticker: async func(n: u32) -> stream<u32>;
     /// The sum of the stream, read by a task after the call returned.

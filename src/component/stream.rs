@@ -10,23 +10,37 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use ext_php_rs::convert::IntoZval;
-use ext_php_rs::exception::PhpResult;
+use ext_php_rs::exception::{PhpException, PhpResult};
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use ext_php_rs::zend::ce;
-use wasmtime::StoreContextMut;
 use wasmtime::component::types::Type;
 use wasmtime::component::{
     Destination, FutureAny, FutureConsumer, FutureReader, Source, StreamAny, StreamConsumer,
     StreamProducer, StreamReader, StreamResult, Val, VecBuffer,
 };
+use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::component::value::scalar;
 use crate::error::runtime_error;
 use crate::store::{self, Active, HostState, SharedStore, Unread, ValueKey};
 use crate::suspend::{Callee, Request};
+use crate::throw::call_error;
 use crate::value::{ConvertError, debug_type, downcast};
+
+/// A trap goes through `call_error`, inside the store closure, so its
+/// coredump is written before pending resources run guest code again.
+fn trap_or_runtime_error(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    err: wasmtime::Error,
+) -> PhpException {
+    if err.is::<wasmtime::Trap>() {
+        call_error(ctx, err)
+    } else {
+        runtime_error(err)
+    }
+}
 
 /// The most items one read takes from the component.
 const CHUNK: usize = 64 * 1024;
@@ -718,7 +732,7 @@ fn advance<T: Item>(iterator: &Zval, shared: &Arc<Mutex<FeedInner<T>>>, element:
             Err(error) => {
                 if let Some(error) = error {
                     // An iterator method that threw left its exception pending already.
-                    ext_php_rs::exception::PhpException::from(error).throw();
+                    PhpException::from(error).throw();
                 }
                 inner.failed = true;
             }
@@ -858,16 +872,15 @@ impl Future {
                     None => {
                         let waiter = awaiting.waiter();
                         let store = self.store.clone();
-                        self.store
-                            .with(|ctx| {
-                                crate::suspend::drive_until_idle(
-                                    &store,
-                                    ctx.run_concurrent(async move |_| {
-                                        std::future::poll_fn(|cx| waiter.arrived(cx)).await
-                                    }),
-                                )
-                            })
-                            .map_err(runtime_error)?;
+                        self.store.with(|mut ctx| {
+                            crate::suspend::drive_until_idle(
+                                &store,
+                                ctx.as_context_mut().run_concurrent(async move |_| {
+                                    std::future::poll_fn(|cx| waiter.arrived(cx)).await
+                                }),
+                            )
+                            .map_err(|err| trap_or_runtime_error(&mut ctx, err))
+                        })?;
                     }
                 },
             }
@@ -963,16 +976,15 @@ impl Stream {
                     pipe.want();
                     let waiter = pipe.waiter();
                     let store = self.store.clone();
-                    self.store
-                        .with(|ctx| {
-                            crate::suspend::drive_until_idle(
-                                &store,
-                                ctx.run_concurrent(async move |_| {
-                                    std::future::poll_fn(|cx| waiter.arrived(cx)).await
-                                }),
-                            )
-                        })
-                        .map_err(runtime_error)?;
+                    self.store.with(|mut ctx| {
+                        crate::suspend::drive_until_idle(
+                            &store,
+                            ctx.as_context_mut().run_concurrent(async move |_| {
+                                std::future::poll_fn(|cx| waiter.arrived(cx)).await
+                            }),
+                        )
+                        .map_err(|err| trap_or_runtime_error(&mut ctx, err))
+                    })?;
                 }
             }
         }

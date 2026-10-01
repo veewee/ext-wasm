@@ -18,7 +18,10 @@ pub fn engine() -> &'static Engine {
             .wasm_gc(true)
             .wasm_simd(true)
             .wasm_exceptions(true)
-            .wasm_component_model_map(true);
+            .wasm_component_model_map(true)
+            // Off unless asked for: wasmtime then captures a dump for every
+            // error leaving wasm, throwing imports and exits included.
+            .coredump_on_trap(!crate::coredump::directory().is_empty());
         // Mach exception ports do not survive fork(), which PHP-FPM and pcntl rely on.
         #[cfg(target_os = "macos")]
         config.macos_use_mach_ports(false);

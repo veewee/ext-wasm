@@ -2579,6 +2579,7 @@ dependencies = [
  "serde_derive",
  "smallvec",
  "target-lexicon",
+ "wasm-encoder 0.258.0",
  "wasmparser 0.258.0",
  "wasmtime-environ",
  "wasmtime-internal-cache",

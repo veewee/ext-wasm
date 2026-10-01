@@ -247,5 +247,9 @@ pub fn call_error(ctx: &mut StoreContextMut<'_, HostState>, err: wasmtime::Error
     {
         return from_wasm(ctx, exception);
     }
-    crate::error::runtime_error(err)
+    let note = err
+        .is::<wasmtime::Trap>()
+        .then(|| crate::coredump::write(ctx, &err))
+        .flatten();
+    crate::error::trap_error(err, note)
 }

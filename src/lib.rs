@@ -2,6 +2,7 @@
 
 mod callback;
 mod component;
+mod coredump;
 mod engine;
 mod error;
 mod exports;
@@ -37,11 +38,13 @@ pub extern "C" fn php_module_info(_module: *mut ModuleEntry) {
     info_table_end!();
 }
 
-static INI_ENTRIES: IniEntryDefs<4> = IniEntryDefs::new([
+static INI_ENTRIES: IniEntryDefs<5> = IniEntryDefs::new([
     // System only: the engine is created once per process, so a later
     // ini_set() could not change anything.
     IniEntryDef::new(c"wasm.cache", c"1", IniEntryPermission::System),
     IniEntryDef::new(c"wasm.cache_dir", c"", IniEntryPermission::System),
+    // System only, so script code cannot choose where files are written.
+    IniEntryDef::new(c"wasm.coredump_dir", c"", IniEntryPermission::System),
     // Taken by each store when it is created, so ini_set() applies to the
     // stores created after it.
     {
