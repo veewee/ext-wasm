@@ -429,6 +429,9 @@ pub fn from_val(
                 .cloned();
             return object(Resource::new(store, meta, *handle).into_zval(false));
         }
+        (Val::Stream(stream), Type::Stream(ty)) => {
+            return crate::component::stream::Stream::lift(ctx, stream, ty.ty());
+        }
         (Val::Flags(set), Type::Flags(flags)) => {
             let mut table = ZendHashTable::new();
             for name in flags.names() {

@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
 use Wasm\Component\Exports;
 use Wasm\Component\Instance;
+use Wasm\Component\Stream;
 use Wasm\Exception\RuntimeError;
 use Wasm\Suspending;
 use Wasm\Wasi;
@@ -138,6 +139,70 @@ final class ComponentAsyncTest extends TestCase
         $again->start();
         $again->resume(5);
         self::assertSame(8, $again->getReturn());
+    }
+
+    public function test_a_stream_returned_by_a_call_is_read_after_the_call_returned(): void
+    {
+        $stream = self::demo(fn (int $n): int => $n)->countUp(5);
+
+        self::assertInstanceOf(Stream::class, $stream);
+        $read = [];
+        while (($chunk = $stream->read()) !== null) {
+            $read = [...$read, ...$chunk];
+        }
+        self::assertSame([0, 1, 2, 3, 4], $read);
+        self::assertNull($stream->read());
+    }
+
+    public function test_a_stream_is_iterable_by_chunk(): void
+    {
+        $chunks = [];
+        foreach (self::demo(fn (int $n): int => $n)->words() as $chunk) {
+            $chunks[] = $chunk;
+        }
+
+        self::assertSame(['alpha', 'beta', 'gamma'], array_merge(...$chunks));
+    }
+
+    public function test_a_byte_stream_gives_binary_string_chunks(): void
+    {
+        $body = '';
+        foreach (self::demo(fn (int $n): int => $n)->bytes(10) as $chunk) {
+            self::assertIsString($chunk);
+            $body .= $chunk;
+        }
+
+        self::assertSame(str_repeat('a', 10), $body);
+    }
+
+    public function test_an_endless_stream_can_be_read_partly_and_dropped(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $stream = $exports->endless();
+
+        self::assertSame(str_repeat('x', 16), $stream->read());
+        self::assertSame(str_repeat('x', 16), $stream->read());
+        unset($stream);
+
+        self::assertSame(8, $exports->run(7));
+    }
+
+    public function test_a_stream_dropped_unread_does_not_block_the_instance(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $exports->endless();
+        $exports->countUp(3);
+
+        self::assertSame(8, $exports->run(7));
+    }
+
+    public function test_reading_a_stream_that_never_progresses_throws_instead_of_hanging(): void
+    {
+        $stream = self::demo(fn (int $n): int => $n)->stuck();
+
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('the component cannot make progress');
+        $stream->read();
     }
 
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void

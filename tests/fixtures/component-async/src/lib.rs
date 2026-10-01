@@ -66,6 +66,12 @@ impl Guest for Component {
         rx
     }
 
+    async fn stuck() -> wit_bindgen::StreamReader<u8> {
+        let (tx, rx) = wit_stream::new::<u8>();
+        std::mem::forget(tx);
+        rx
+    }
+
     async fn sum(mut s: wit_bindgen::StreamReader<u32>) -> u64 {
         let mut total = 0u64;
         while let Some(n) = s.next().await {

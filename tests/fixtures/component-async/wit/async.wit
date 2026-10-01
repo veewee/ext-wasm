@@ -16,6 +16,8 @@ world async-demo {
     export words: async func() -> stream<string>;
     /// Bytes until the reader goes away.
     export endless: async func() -> stream<u8>;
+    /// A stream whose writer never writes and never closes.
+    export stuck: async func() -> stream<u8>;
     /// The sum of the numbers read.
     export sum: async func(s: stream<u32>) -> u64;
     /// The number of bytes read.

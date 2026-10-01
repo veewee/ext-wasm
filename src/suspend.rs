@@ -173,13 +173,53 @@ pub fn drive<R>(
     store: &StoreHandle,
     future: impl Future<Output = wasmtime::Result<R>>,
 ) -> wasmtime::Result<R> {
+    drive_with(store, future, false)
+}
+
+/// `drive` for wasmtime's public event loop, which keeps polling a future
+/// nobody can complete: it throws once a poll leaves no request and wakes
+/// nothing, three times in a row. Every WASI and HTTP host function the
+/// extension links is synchronous, so a component waiting on I/O blocks
+/// inside a poll rather than leaving the loop idle.
+pub fn drive_until_idle<R>(
+    store: &StoreHandle,
+    future: impl Future<Output = wasmtime::Result<R>>,
+) -> wasmtime::Result<R> {
+    drive_with(store, future, true)
+}
+
+struct Flag(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for Flag {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn drive_with<R>(
+    store: &StoreHandle,
+    future: impl Future<Output = wasmtime::Result<R>>,
+    detect_idle: bool,
+) -> wasmtime::Result<R> {
     let _clear = ClearSlots(store);
     // Declared after the guard, so the future is dropped first: wasmtime then
     // unwinds a parked call before the slots and the caller pointer go.
     let mut future = pin!(future);
-    let mut cx = Context::from_waker(Waker::noop());
+    let flag = std::sync::Arc::new(Flag(std::sync::atomic::AtomicBool::new(false)));
+    let waker = if detect_idle {
+        Waker::from(flag.clone())
+    } else {
+        Waker::noop().clone()
+    };
+    let mut cx = Context::from_waker(&waker);
     let runtime = store.uses_wasi().then(crate::engine::wasi_runtime);
+    let mut idle = 0;
     loop {
+        flag.0.store(false, std::sync::atomic::Ordering::SeqCst);
         // Entered for this poll only: the PHP callback between polls may
         // suspend the Fiber, and another Fiber's guard may come and go meanwhile.
         let polled = {
@@ -190,8 +230,22 @@ pub fn drive<R>(
             return result;
         }
         // Without a request wasmtime only yielded, for example inside its GC.
+        let mut asked = false;
         while let Some(request) = store.take_request() {
+            asked = true;
             call_parked(store, request);
+        }
+        if detect_idle {
+            idle = if asked || flag.0.load(std::sync::atomic::Ordering::SeqCst) {
+                0
+            } else {
+                idle + 1
+            };
+            if idle >= 3 {
+                return Err(wasmtime::Error::msg(
+                    "the component cannot make progress: it waits for something that never happens",
+                ));
+            }
         }
     }
 }

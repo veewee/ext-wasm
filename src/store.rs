@@ -220,6 +220,8 @@ pub struct StoreHandle {
     /// Component resource handles released while the store was in use, for
     /// example by a PHP destructor during a call. Dropped after the call.
     pending_drops: RefCell<Vec<wasmtime::component::ResourceAny>>,
+    /// Component streams PHP dropped unread while the store was in use.
+    pending_closes: RefCell<Vec<wasmtime::component::StreamAny>>,
     /// Whether the store runs WASI, whose functions need the tokio runtime
     /// entered while wasm runs.
     uses_wasi: Cell<bool>,
@@ -294,6 +296,7 @@ pub fn new() -> SharedStore {
         next_request: Cell::new(0),
         garbage: RefCell::new(Vec::new()),
         pending_drops: RefCell::new(Vec::new()),
+        pending_closes: RefCell::new(Vec::new()),
         uses_wasi: Cell::new(false),
         resource_types: RefCell::new(Vec::new()),
     })
@@ -431,13 +434,29 @@ impl StoreHandle {
         }
     }
 
+    /// Closes a component stream PHP dropped unread, or queues it until the
+    /// store is free, like `drop_resource`.
+    pub fn close_stream(&self, stream: wasmtime::component::StreamAny) {
+        let busy =
+            !matches!(self.active.get(), Active::None) || self.store.try_borrow_mut().is_err();
+        self.pending_closes.borrow_mut().push(stream);
+        if !busy {
+            self.drop_pending_resources();
+        }
+    }
+
     fn drop_pending_resources(&self) {
         loop {
+            let closes = std::mem::take(&mut *self.pending_closes.borrow_mut());
             let pending = std::mem::take(&mut *self.pending_drops.borrow_mut());
-            if pending.is_empty() {
+            if pending.is_empty() && closes.is_empty() {
                 return;
             }
             let mut store = self.store.borrow_mut();
+            for mut stream in closes {
+                // A stream of an instance that trapped is freed with the store.
+                let _ = stream.close(&mut *store);
+            }
             let is_async = store.data().is_async;
             for handle in pending {
                 // A handle of an instance that trapped cannot be dropped; the
