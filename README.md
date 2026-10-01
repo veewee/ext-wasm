@@ -26,6 +26,16 @@ Install it with [PIE](https://github.com/php/pie):
 pie install veewee/ext-wasm
 ```
 
+In the official PHP Docker images, install `unzip` first. PIE needs it to unpack the prebuilt binary, and those images have neither `unzip` nor the zip extension:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends unzip
+COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
+RUN pie install veewee/ext-wasm
+```
+
+PIE finds the prebuilt binary through the GitHub API, which allows 60 requests an hour without a token. When many builds share an address, as on CI runners, give PIE a token through Composer's `COMPOSER_AUTH`, for example `COMPOSER_AUTH='{"github-oauth":{"github.com":"<token>"}}'`. Otherwise PIE falls back to building from source, which needs Rust.
+
 The release workflow attaches prebuilt binaries for PHP 8.2 to 8.5 to each release, and PIE picks the one for your platform:
 
 | Platform | Prebuilt | Without a prebuilt binary |
