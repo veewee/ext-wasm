@@ -243,6 +243,7 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 | `variant` | `new Wasm\Component\Variant('case-name', $payload)` |
 | `result` returned by a function | the ok value, or a thrown `Wasm\Exception\ComponentError` with `$payload` |
 | `result` anywhere else | `Wasm\Component\Result::ok($value)` or `Result::err($error)` |
+| `error-context` | a `Wasm\Component\ErrorContext` with nothing to read: wasmtime 49 gives the host no access to its debug message. PHP cannot create one or give one to a component, so any value passed where an export takes one throws a `TypeError` (`null` still works for an `option`), and an import that returns one fails to link |
 
 A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import: the component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance". A PHP import may call back into its own instance.
 

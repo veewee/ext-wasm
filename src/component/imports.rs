@@ -380,9 +380,11 @@ fn define(
 ) -> PhpResult<()> {
     if let Some(unsupported) = ty
         .params()
-        .map(|(_, ty)| ty)
-        .chain(ty.results())
-        .find_map(|ty| unsupported_part(&ty))
+        .find_map(|(_, ty)| unsupported_part(&ty, Direction::ToPhp))
+        .or_else(|| {
+            ty.results()
+                .find_map(|ty| unsupported_part(&ty, Direction::FromPhp))
+        })
     {
         return Err(link_error(format!(
             "import \"{path}\" uses {unsupported}, which is not supported yet"
@@ -426,21 +428,30 @@ fn define(
         .map_err(link_error)
 }
 
-/// The first type inside `ty` that the value mapping cannot convert yet.
-fn unsupported_part(ty: &Type) -> Option<String> {
-    let nested = |types: Vec<Type>| types.iter().find_map(unsupported_part);
+#[derive(Clone, Copy, PartialEq)]
+enum Direction {
+    ToPhp,
+    FromPhp,
+}
+
+/// The first type inside `ty` that the value mapping cannot convert yet in
+/// `direction`. PHP receives an error-context but cannot make one, see
+/// `value::to_val`.
+fn unsupported_part(ty: &Type, direction: Direction) -> Option<String> {
+    let nested = |types: Vec<Type>| types.iter().find_map(|ty| unsupported_part(ty, direction));
     match ty {
         Type::Map(map) if !crate::component::value::is_map_key(&map.key()) => Some(wit_type(ty)),
-        Type::Map(map) => unsupported_part(&map.value()),
-        Type::FixedLengthList(_) | Type::ErrorContext => Some(wit_type(ty)),
+        Type::Map(map) => unsupported_part(&map.value(), direction),
+        Type::FixedLengthList(_) => Some(wit_type(ty)),
+        Type::ErrorContext if direction == Direction::FromPhp => Some(wit_type(ty)),
         Type::Stream(stream) if !crate::component::stream::supports(stream.ty().as_ref()) => {
             Some(wit_type(ty))
         }
         Type::Future(future) if !crate::component::stream::supports(future.ty().as_ref()) => {
             Some(wit_type(ty))
         }
-        Type::List(list) => unsupported_part(&list.ty()),
-        Type::Option(option) => unsupported_part(&option.ty()),
+        Type::List(list) => unsupported_part(&list.ty(), direction),
+        Type::Option(option) => unsupported_part(&option.ty(), direction),
         Type::Tuple(tuple) => nested(tuple.types().collect()),
         Type::Record(record) => nested(record.fields().map(|field| field.ty).collect()),
         Type::Variant(variant) => nested(variant.cases().filter_map(|case| case.ty).collect()),
