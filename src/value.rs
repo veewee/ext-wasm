@@ -101,7 +101,12 @@ pub fn to_ref(
         return Ok(match ty.heap_type().top() {
             HeapTopType::Func => Ref::Func(None),
             HeapTopType::Extern => Ref::Extern(None),
-            _ => return Err(ConvertError::Type(format!("unsupported wasm type {ty}"))),
+            _ => {
+                return Err(ConvertError::Type(format!(
+                    "unsupported wasm type {}",
+                    crate::types::ref_type_name(ty)
+                )));
+            }
         });
     }
     match ty.heap_type() {
@@ -128,7 +133,34 @@ pub fn to_ref(
                 debug_type(value)
             ))),
         },
-        _ => Err(ConvertError::Type(format!("unsupported wasm type {ty}"))),
+        HeapType::ConcreteFunc(expected) => match downcast::<Func>(value) {
+            // The store check comes first: a func of another store makes
+            // wasmtime's type lookups panic.
+            Some(func) if store::owns(&*ctx, &func.store) => {
+                let actual = func.inner.ty(&*ctx);
+                // Matched by declared type, as the spec and JS do: wasmtime's
+                // own Func::matches_ty only compares parameters and results.
+                if HeapType::ConcreteFunc(actual.clone()).matches(ty.heap_type()) {
+                    Ok(Ref::Func(Some(func.inner)))
+                } else {
+                    Err(ConvertError::Type(format!(
+                        "expected a Wasm\\Func of type {}, got one of type {}",
+                        crate::types::signature(expected),
+                        crate::types::signature(&actual)
+                    )))
+                }
+            }
+            Some(_) => Err(ConvertError::Link(store::mismatch_message("Func"))),
+            None => Err(ConvertError::Type(format!(
+                "expected Wasm\\Func for {}, got {}",
+                crate::types::ref_type_name(ty),
+                debug_type(value)
+            ))),
+        },
+        _ => Err(ConvertError::Type(format!(
+            "unsupported wasm type {}",
+            crate::types::ref_type_name(ty)
+        ))),
     }
 }
 

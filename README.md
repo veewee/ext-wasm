@@ -376,6 +376,7 @@ In practice, give every Fiber an instance of its own, and have the callback writ
 | `v128` | 16 byte string | 16 byte string |
 | `externref` | any PHP value, `null` for a null reference | the same value, by identity |
 | `funcref` | `Wasm\Func` or `null` | `Wasm\Func` or `null` |
+| a reference to a function type of the module, `(ref null $t)` | a `Wasm\Func` of that type or a declared subtype, as in JS; `null` only when nullable | `Wasm\Func` or `null` |
 
 Conversion is strict where JS coerces: passing `'1'` or `1.5` for an `i32` throws a `TypeError` and an out of range integer throws a `ValueError`.
 
