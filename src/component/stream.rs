@@ -26,7 +26,7 @@ use crate::component::value::scalar;
 use crate::error::runtime_error;
 use crate::store::{self, Active, HostState, SharedStore, Unread, ValueKey};
 use crate::suspend::{Callee, Request};
-use crate::value::{ConvertError, debug_type};
+use crate::value::{ConvertError, debug_type, downcast};
 
 /// The most items one read takes from the component.
 const CHUNK: usize = 64 * 1024;
@@ -287,7 +287,7 @@ impl<T: wasmtime::component::Lift + Send + 'static> StreamConsumer<HostState> fo
     fn poll_consume(
         self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
-        store: StoreContextMut<'_, HostState>,
+        mut store: StoreContextMut<'_, HostState>,
         mut source: Source<'_, T>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
@@ -302,7 +302,9 @@ impl<T: wasmtime::component::Lift + Send + 'static> StreamConsumer<HostState> fo
             inner.consumer = Some(cx.waker().clone());
             return Poll::Pending;
         }
-        let mut chunk = Vec::with_capacity(CHUNK);
+        // Room for what the writer offers, not CHUNK items every time.
+        let offered = source.remaining(&mut store);
+        let mut chunk = Vec::with_capacity(offered.clamp(1, CHUNK));
         source.read(store, &mut chunk)?;
         if chunk.is_empty() {
             return Poll::Ready(Ok(StreamResult::Completed));
@@ -463,6 +465,9 @@ macro_rules! payloads {
             let runtime = |err: wasmtime::Error| ConvertError::Runtime(format!("{err:#}"));
             match &element {
                 $(Some(element @ $kind) => {
+                    if downcast::<Stream>(value).is_some() || downcast::<Future>(value).is_some() {
+                        return Err(passed_back(value));
+                    }
                     let value = <$ty as Item>::from_val(scalar(value, element)?)
                         .ok_or_else(|| ConvertError::Runtime("unexpected value".into()))?;
                     let reader = FutureReader::new(&mut *ctx, std::future::ready(Ok::<_, wasmtime::Error>(value)))
@@ -522,6 +527,14 @@ payloads! {
     String(String) = Type::String,
 }
 
+/// A stream or future of a component is read in PHP, not handed back.
+fn passed_back(value: &Zval) -> ConvertError {
+    ConvertError::Type(format!(
+        "a {} of the component cannot be passed back; read it and pass what it gave",
+        debug_type(value)
+    ))
+}
+
 /// Whether a stream or future of `element` can cross to PHP: scalar
 /// payloads only, since wasmtime's typed stream API needs the Rust type.
 pub fn supports(element: Option<&Type>) -> bool {
@@ -563,6 +576,9 @@ where
             debug_type(value)
         ))
     };
+    if downcast::<Stream>(value).is_some() || downcast::<Future>(value).is_some() {
+        return Err(passed_back(value));
+    }
     let mut items = Vec::new();
     let iterator = if let Some(array) = value.array() {
         for item in array.values() {

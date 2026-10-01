@@ -80,6 +80,42 @@ impl Guest for Component {
         rx
     }
 
+    async fn fire(n: u32) -> wit_bindgen::FutureReader<u32> {
+        let (tx, rx) = wit_future::new::<u32>(|| 0);
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write(slow(n).await).await;
+        });
+        rx
+    }
+
+    async fn ticker(n: u32) -> wit_bindgen::StreamReader<u32> {
+        let (mut tx, rx) = wit_stream::new::<u32>();
+        wit_bindgen::spawn_local(async move {
+            for i in 0..n {
+                if !tx.write_all(vec![slow(i).await]).await.is_empty() {
+                    return;
+                }
+            }
+        });
+        rx
+    }
+
+    async fn rest_sum(mut s: wit_bindgen::StreamReader<u32>) -> wit_bindgen::FutureReader<u64> {
+        let (tx, rx) = wit_future::new::<u64>(|| 0);
+        wit_bindgen::spawn_local(async move {
+            let mut total = 0u64;
+            while let Some(n) = s.next().await {
+                total += u64::from(n);
+            }
+            let _ = tx.write(total).await;
+        });
+        rx
+    }
+
+    async fn first(mut s: wit_bindgen::StreamReader<u32>) -> u32 {
+        s.next().await.unwrap_or(0)
+    }
+
     async fn sum(mut s: wit_bindgen::StreamReader<u32>) -> u64 {
         let mut total = 0u64;
         while let Some(n) = s.next().await {

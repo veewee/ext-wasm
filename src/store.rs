@@ -44,8 +44,9 @@ pub struct HostState {
 // data. A store is created, used and dropped on one PHP thread and never
 // handed to another, so the Rc and raw pointers inside are never touched from
 // two threads. The sync WASI functions run every host call on the calling
-// thread, and `suspend::drive` polls every async call on that thread with a
-// no-op waker. Preview2 file streams do hand reads and writes to tokio's
+// thread, and `suspend::drive` polls every async call on that thread. Its
+// waker is a no-op, or an atomic flag for the event loop of streams and
+// futures; neither touches the store data. Preview2 file streams do hand reads and writes to tokio's
 // blocking pool, but those tasks own their buffers and file handles, never
 // the store data. Async WASI would need this revisited.
 unsafe impl Send for HostState {}
@@ -168,7 +169,7 @@ impl Values {
         }
     }
 
-    fn reclaim(&mut self) {
+    pub fn reclaim(&mut self) {
         let freed = self
             .freed
             .lock()
@@ -605,11 +606,21 @@ impl StoreHandle {
     }
 
     /// Empties the slots after a driven call, however it ended.
+    ///
+    /// Requests of async imports and stream feeds stay, with their responses
+    /// and wakers: they belong to guest tasks that outlive the call, which
+    /// the next driven call picks up. Only requests that point into the
+    /// call's own future go with it.
     pub fn clear_slots(&self) {
-        let requests = std::mem::take(&mut *self.requests.borrow_mut());
-        let responses = std::mem::take(&mut *self.responses.borrow_mut());
-        self.wakers.borrow_mut().clear();
-        drop((requests, responses));
+        let gone: std::collections::VecDeque<suspend::Request> = {
+            let mut requests = self.requests.borrow_mut();
+            let (keep, gone) = std::mem::take(&mut *requests)
+                .into_iter()
+                .partition(|request| matches!(request.access, Active::Unavailable));
+            *requests = keep;
+            gone
+        };
+        drop(gone);
     }
 
     /// Collects unreferenced externrefs once enough PHP values piled up, and
@@ -623,6 +634,10 @@ impl StoreHandle {
             values.reclaim();
             values.gc_threshold = values.live() * 2;
         }
+        // Also frees what wasm let go of during the call, such as the
+        // iterator of a stream the component dropped, so a generator's
+        // `finally` runs now rather than after some later call.
+        store.data_mut().values.reclaim();
         let mut released = std::mem::take(&mut store.data_mut().values.released);
         released.append(&mut self.take_garbage());
         released

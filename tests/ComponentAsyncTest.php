@@ -381,6 +381,63 @@ final class ComponentAsyncTest extends TestCase
         self::assertInstanceOf(Instance::class, new Instance($component, ['take' => fn (Stream $s) => null]));
     }
 
+    public function test_a_task_spawned_by_a_call_may_call_an_import_after_the_call_returned(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n * 10);
+
+        self::assertSame(40, $exports->fire(4)->await());
+    }
+
+    public function test_a_stream_written_between_import_calls_is_read_to_the_end(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n + 100);
+
+        self::assertSame([100, 101, 102], array_merge(...iterator_to_array($exports->ticker(3), false)));
+    }
+
+    public function test_a_php_iterable_is_read_by_a_task_after_the_call_returned(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $numbers = (function () {
+            yield from [1, 2, 3, 4, 5];
+        })();
+
+        self::assertSame(15, $exports->restSum($numbers)->await());
+    }
+
+    public function test_a_generator_the_component_drops_early_is_released_after_the_call(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $released = false;
+        $numbers = (function () use (&$released) {
+            try {
+                yield 7;
+                yield 8;
+            } finally {
+                $released = true;
+            }
+        })();
+
+        self::assertSame(7, $exports->first($numbers));
+        unset($numbers);
+        self::assertTrue($released);
+    }
+
+    public function test_a_stream_or_future_of_the_component_cannot_be_passed_back(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        try {
+            $exports->sum($exports->countUp(3));
+            self::fail('a stream was passed back');
+        } catch (\TypeError $e) {
+            self::assertStringContainsString('cannot be passed back', $e->getMessage());
+        }
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('cannot be passed back');
+        $exports->awaitValue($exports->greetLater('a'));
+    }
+
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void
     {
         $exports = (new Instance(new Component(self::ASYNC_EXPORT), ['plain' => fn (): int => 41]))->exports;

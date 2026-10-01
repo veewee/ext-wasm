@@ -118,7 +118,6 @@ impl ResultValue {
     }
 }
 
-/// Converts a PHP value to a component value of type `ty`.
 /// Whether `ty` converts without the store, see `scalar`.
 pub fn is_scalar(ty: &Type) -> bool {
     matches!(
@@ -186,6 +185,7 @@ pub fn scalar(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
     })
 }
 
+/// Converts a PHP value to a component value of type `ty`.
 pub fn to_val(
     ctx: &mut StoreContextMut<'_, HostState>,
     value: &Zval,

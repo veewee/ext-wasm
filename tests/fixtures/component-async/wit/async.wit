@@ -25,6 +25,14 @@ world async-demo {
     export stuck: async func() -> stream<u8>;
     /// Records in a stream, which the extension cannot carry yet.
     export points: async func() -> stream<point>;
+    /// A future that a task spawned by the call writes with slow(n), after the call returned.
+    export fire: async func(n: u32) -> future<u32>;
+    /// slow(0) to slow(n - 1), each called between two writes.
+    export ticker: async func(n: u32) -> stream<u32>;
+    /// The sum of the stream, read by a task after the call returned.
+    export rest-sum: async func(s: stream<u32>) -> future<u64>;
+    /// The first number of the stream, which is then dropped unread.
+    export first: async func(s: stream<u32>) -> u32;
     /// The sum of the numbers read.
     export sum: async func(s: stream<u32>) -> u64;
     /// The number of bytes read.
