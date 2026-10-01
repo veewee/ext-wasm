@@ -1,6 +1,7 @@
 #![cfg_attr(windows, feature(abi_vectorcall))]
 
 mod callback;
+mod component;
 mod engine;
 mod error;
 mod exports;
@@ -87,7 +88,21 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<error::LinkError>()
         .class::<error::RuntimeError>()
         .class::<throw::WasmThrow>()
+        .class::<component::error::ComponentError>()
         .class::<module::Module>()
+        .class::<component::Component>()
+        .class::<component::func::Func>()
+        .class::<component::exports::ExportsIterator>()
+        .class::<component::exports::Exports>()
+        .class::<component::instance::Instance>()
+        .class::<component::resource::ResourceClass>()
+        .class::<component::resource::Resource>()
+        .class::<component::types::ValueType>()
+        .class::<component::types::FunctionType>()
+        .class::<component::http_handler::Request>()
+        .class::<component::http_handler::Response>()
+        .class::<component::value::Variant>()
+        .class::<component::value::ResultValue>()
         .class::<store::StoreObject>()
         .class::<suspend::Suspending>()
         .class::<wasi::Wasi>()

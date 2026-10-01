@@ -1,0 +1,22 @@
+[package]
+name = "link-preview"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+htmd = "=0.5.5"
+scraper = "=0.27.0"
+serde_json = "1"
+url = "2"
+wasi = "=0.14.7"
+wit-bindgen = "=0.62.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

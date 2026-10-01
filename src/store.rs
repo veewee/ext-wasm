@@ -21,6 +21,15 @@ pub struct HostState {
     handle: Weak<StoreHandle>,
     /// The WASI context of a store created by `Wasm\Wasi`.
     pub wasi: Option<wasmtime_wasi::p1::WasiP1Ctx>,
+    /// The preview2 WASI context of a component instance given a `Wasm\Wasi`.
+    pub wasi_p2: Option<WasiP2>,
+    /// Outgoing wasi:http of a component instance given a `Wasm\\Wasi` with httpHosts.
+    pub http: Option<crate::component::http::WasiHttp>,
+    /// The PHP objects behind resources a component imports.
+    pub host_resources: crate::component::host_resource::HostResources,
+    /// Component resources given for `own` values of the calls being made,
+    /// which move into the component once their call worked.
+    pub moves: Vec<*const crate::component::resource::Resource>,
     /// Set once an instance with a `Wasm\Suspending` import joins this store.
     /// From then on every PHP callback is async and every call goes through
     /// `suspend::drive`, because wasmtime rejects sync calls in the store.
@@ -32,11 +41,43 @@ pub struct HostState {
 // SAFETY: wasmtime-wasi and wasmtime's async functions require Send store
 // data. A store is created, used and dropped on one PHP thread and never
 // handed to another, so the Rc and raw pointers inside are never touched from
-// two threads. The sync p1 functions with in-memory stdio and
-// `allow_blocking_current_thread` run every host call on the calling thread,
-// and `suspend::drive` polls every async call on that thread with a no-op
-// waker. Async WASI or streaming stdio would need this revisited.
+// two threads. The sync WASI functions run every host call on the calling
+// thread, and `suspend::drive` polls every async call on that thread with a
+// no-op waker. Preview2 file streams do hand reads and writes to tokio's
+// blocking pool, but those tasks own their buffers and file handles, never
+// the store data. Async WASI would need this revisited.
 unsafe impl Send for HostState {}
+
+pub struct WasiP2 {
+    pub ctx: wasmtime_wasi::WasiCtx,
+    pub table: wasmtime::component::ResourceTable,
+}
+
+impl wasmtime_wasi::WasiView for HostState {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        let p2 = self
+            .wasi_p2
+            .as_mut()
+            .expect("preview2 WASI functions only exist in stores given a Wasm\\Wasi");
+        wasmtime_wasi::WasiCtxView {
+            ctx: &mut p2.ctx,
+            table: &mut p2.table,
+        }
+    }
+}
+
+impl wasmtime_wasi_http::WasiHttpView for HostState {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
+        let (Some(p2), Some(http)) = (self.wasi_p2.as_mut(), self.http.as_mut()) else {
+            panic!("wasi:http functions only exist in stores given a Wasm\\Wasi with httpHosts");
+        };
+        wasmtime_wasi_http::WasiHttpCtxView {
+            hooks: &mut http.hooks,
+            table: &mut p2.table,
+            ctx: &mut http.ctx,
+        }
+    }
+}
 
 /// A tag's PHP object, held without a reference.
 ///
@@ -153,12 +194,12 @@ impl Values {
 /// as some wasm object in it does.
 pub struct StoreHandle {
     store: RefCell<Store<HostState>>,
-    /// The caller of the host function that is currently running PHP code.
+    /// The store access of the host function that is currently running PHP code.
     ///
     /// While wasm runs, the outer call holds the `RefCell` borrow, so a PHP
     /// callback that touches any wasm object (calling another export, reading
-    /// memory) must go through the caller wasmtime handed to the host function.
-    active: Cell<*mut Caller<'static, HostState>>,
+    /// memory) must go through what wasmtime handed to the host function.
+    active: Cell<Active>,
     /// Set while an async call waits outside wasm for its PHP callback. Its
     /// wasm frames are then off the activation list that wasmtime's GC walks,
     /// so nothing that can run the GC may touch the store: see `busy`.
@@ -168,9 +209,27 @@ pub struct StoreHandle {
     /// Values a parked call's callback handed back, dropped where PHP code may
     /// run: before the next callback, or once the store borrow ends.
     garbage: RefCell<Vec<Zval>>,
+    /// Component resource handles released while the store was in use, for
+    /// example by a PHP destructor during a call. Dropped after the call.
+    pending_drops: RefCell<Vec<wasmtime::component::ResourceAny>>,
+    /// Whether the store runs WASI, whose functions need the tokio runtime
+    /// entered while wasm runs.
+    uses_wasi: Cell<bool>,
+    /// The resource types component instances in this store export, so a
+    /// handle the component returns gets its methods.
+    pub resource_types: RefCell<Vec<Rc<crate::component::resource::ResourceMeta>>>,
 }
 
 pub type SharedStore = Rc<StoreHandle>;
+
+/// What a running host function received from wasmtime: a core function gets
+/// a `Caller`, a component function a `StoreContextMut`.
+#[derive(Clone, Copy)]
+pub enum Active {
+    None,
+    Core(*mut Caller<'static, HostState>),
+    Component(*mut StoreContextMut<'static, HostState>),
+}
 
 thread_local! {
     static STANDALONE: RefCell<Weak<StoreHandle>> = const { RefCell::new(Weak::new()) };
@@ -216,11 +275,14 @@ pub fn new() -> SharedStore {
                 ..HostState::default()
             },
         )),
-        active: Cell::new(std::ptr::null_mut()),
+        active: Cell::new(Active::None),
         parked: Cell::new(false),
         request: RefCell::new(None),
         response: RefCell::new(None),
         garbage: RefCell::new(Vec::new()),
+        pending_drops: RefCell::new(Vec::new()),
+        uses_wasi: Cell::new(false),
+        resource_types: RefCell::new(Vec::new()),
     })
 }
 
@@ -294,9 +356,17 @@ impl StoreHandle {
     /// when it returns, so PHP values held by wasm only stay alive as long as
     /// wasm itself references them.
     pub fn with<R>(&self, f: impl FnOnce(StoreContextMut<'_, HostState>) -> R) -> R {
-        let active = self.active.get();
-        if !active.is_null() {
-            // SAFETY: `active` is only non-null inside `enter_host`, or while
+        match self.active.get() {
+            Active::None => {}
+            Active::Component(ctx) => {
+                // SAFETY: only set inside `enter_component`, which keeps the
+                // context alive for the duration and restores the previous
+                // value before returning. The outer borrow waits inside
+                // wasmtime's call meanwhile.
+                let mut scope = RootScope::new(unsafe { &mut *ctx });
+                return f(scope.as_context_mut());
+            }
+            // SAFETY: `Core` is only set inside `enter_host`, or while
             // `park` holds the caller of a parked async call, which stays at a
             // stable address inside wasmtime's pinned future. Both restore the
             // previous value when they end. No other reference to the store is
@@ -309,34 +379,99 @@ impl StoreHandle {
             // thread-local activations on suspend (runtime/fiber.rs), and on
             // `busy` keeping out everything that enters wasm or can run the GC.
             // Check this again whenever wasmtime is upgraded.
-            let mut scope = RootScope::new(unsafe { &mut *active });
-            return f(scope.as_context_mut());
+            Active::Core(caller) => {
+                let mut scope = RootScope::new(unsafe { &mut *caller });
+                return f(scope.as_context_mut());
+            }
         }
 
         let result = {
             let mut store = self.store.borrow_mut();
+            let wasi = store.data().wasi.is_some() || store.data().wasi_p2.is_some();
+            self.uses_wasi.set(wasi);
+            // A call into an async store can suspend its Fiber, and tokio
+            // requires its enter guards to drop in reverse order, which
+            // Fibers resumed out of order break. `suspend::drive` enters the
+            // runtime for each poll there instead.
+            let runtime = (wasi && !store.data().is_async).then(crate::engine::wasi_runtime);
+            let _entered = runtime.as_ref().map(tokio::runtime::Handle::enter);
             let mut scope = RootScope::new(&mut *store);
             f(scope.as_context_mut())
         };
+        self.drop_pending_resources();
         drop(self.collect());
         result
+    }
+
+    /// Releases a component resource handle, or queues it until the store is
+    /// free when a call is running: dropping runs the component's destructor,
+    /// which would enter the component again.
+    pub fn drop_resource(&self, handle: wasmtime::component::ResourceAny) {
+        let busy =
+            !matches!(self.active.get(), Active::None) || self.store.try_borrow_mut().is_err();
+        self.pending_drops.borrow_mut().push(handle);
+        if !busy {
+            self.drop_pending_resources();
+        }
+    }
+
+    fn drop_pending_resources(&self) {
+        loop {
+            let pending = std::mem::take(&mut *self.pending_drops.borrow_mut());
+            if pending.is_empty() {
+                return;
+            }
+            let mut store = self.store.borrow_mut();
+            let is_async = store.data().is_async;
+            for handle in pending {
+                // A handle of an instance that trapped cannot be dropped; the
+                // store frees it together with the instance.
+                if is_async {
+                    // This runs from PHP destructors, even during garbage
+                    // collection, where the component's destructor must not
+                    // suspend the Fiber.
+                    let _no_fiber_switch = crate::callback::FiberSwitchBlock::new();
+                    let _ = crate::suspend::drive(self, handle.resource_drop_async(&mut *store));
+                } else {
+                    let _ = handle.resource_drop(&mut *store);
+                }
+            }
+        }
     }
 
     /// Runs PHP code from inside a host function, routing store access through `caller`.
     pub fn enter_host<R>(&self, caller: &mut Caller<'_, HostState>, f: impl FnOnce() -> R) -> R {
         let previous = self
             .active
-            .replace((caller as *mut Caller<'_, HostState>).cast());
+            .replace(Active::Core((caller as *mut Caller<'_, HostState>).cast()));
+        let _restore = Restore(&self.active, previous);
+        f()
+    }
+
+    /// Runs PHP code from inside a component host function, routing store
+    /// access through `ctx`.
+    pub fn enter_component<R>(
+        &self,
+        ctx: &mut StoreContextMut<'_, HostState>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let previous = self.active.replace(Active::Component(
+            (ctx as *mut StoreContextMut<'_, HostState>).cast(),
+        ));
         let _restore = Restore(&self.active, previous);
         f()
     }
 
     /// Routes store access through the caller of a parked async call until
     /// the guard drops.
-    pub fn park(&self, caller: *mut Caller<'static, HostState>) -> Parked<'_> {
-        let previous = self.active.replace(caller);
-        self.parked.set(true);
-        Parked(self, previous)
+    pub fn park(&self, access: Active) -> Parked<'_> {
+        let previous = self.active.replace(access);
+        let was_parked = self.parked.replace(true);
+        Parked(self, previous, was_parked)
+    }
+
+    pub fn uses_wasi(&self) -> bool {
+        self.uses_wasi.get()
     }
 
     pub fn is_parked(&self) -> bool {
@@ -404,10 +539,7 @@ impl StoreHandle {
     }
 }
 
-struct Restore<'a>(
-    &'a Cell<*mut Caller<'static, HostState>>,
-    *mut Caller<'static, HostState>,
-);
+struct Restore<'a>(&'a Cell<Active>, Active);
 
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
@@ -415,11 +547,11 @@ impl Drop for Restore<'_> {
     }
 }
 
-pub struct Parked<'a>(&'a StoreHandle, *mut Caller<'static, HostState>);
+pub struct Parked<'a>(&'a StoreHandle, Active, bool);
 
 impl Drop for Parked<'_> {
     fn drop(&mut self) {
-        self.0.parked.set(false);
+        self.0.parked.set(self.2);
         self.0.active.set(self.1);
     }
 }

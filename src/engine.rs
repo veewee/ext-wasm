@@ -90,3 +90,56 @@ pub fn compile_in_process_pool<R: Send>(
 
     Ok(pool.install(compile))
 }
+
+/// The tokio runtime WASI file streams and clocks run on, one per process.
+///
+/// wasmtime-wasi otherwise uses a global runtime of its own. A forked child
+/// inherits that runtime without its worker threads, so its first file read
+/// or timer waited forever when the parent had used WASI before forking. The
+/// runtime wasmtime-wasi finds entered on the current thread takes its place.
+pub fn wasi_runtime() -> tokio::runtime::Handle {
+    thread_local! {
+        static CACHED: std::cell::RefCell<Option<(u32, tokio::runtime::Handle)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let pid = std::process::id();
+    CACHED.with(|cached| {
+        let mut cached = cached.borrow_mut();
+        match cached.as_ref() {
+            Some((owner, handle)) if *owner == pid => handle.clone(),
+            _ => {
+                let handle = process_runtime(pid);
+                *cached = Some((pid, handle.clone()));
+                handle
+            }
+        }
+    })
+}
+
+fn process_runtime(pid: u32) -> tokio::runtime::Handle {
+    static RUNTIME: Mutex<Option<(u32, tokio::runtime::Runtime)>> = Mutex::new(None);
+
+    let mut slot = RUNTIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((owner, runtime)) = slot.as_ref()
+        && *owner == pid
+    {
+        return runtime.handle().clone();
+    }
+    // Dropping an inherited runtime would wait for threads that do not exist here.
+    if let Some(inherited) = slot.take() {
+        std::mem::forget(inherited);
+    }
+    // Multi-threaded, because a current-thread runtime only drives its timers
+    // from Runtime::block_on, not from the Handle::block_on wasmtime-wasi uses.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_time()
+        .enable_io()
+        .build()
+        .expect("a tokio runtime can be built");
+    let handle = runtime.handle().clone();
+    *slot = Some((pid, runtime));
+    handle
+}

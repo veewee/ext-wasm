@@ -293,11 +293,13 @@ namespace Wasm {
     }
 
     /**
-     * A WASI preview1 environment for one run of one module, like Node's `WASI`.
+     * A WASI environment for one run of one module or component, like Node's `WASI`.
      *
-     * Nothing of the host is visible to the module except what is passed here:
+     * Nothing of the host is visible to the program except what is passed here:
      * no environment, no stdio and no files outside the preopened directories.
-     * stdout and stderr are captured and read after the run.
+     * stdout and stderr are captured and read after the run. A core module gets
+     * WASI preview1 through `getImportObject()`, a component gets preview2 when
+     * the Wasi object is passed to `Wasm\Component\Instance`.
      */
     class Wasi {
         /**
@@ -305,12 +307,15 @@ namespace Wasm {
          * @param array<string, string>|null $env
          * @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
          * @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
+         * @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
          *
          * @param string|null $stdin
          */
-        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null) {}
+        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null, ?array $httpHosts = null) {}
 
         /**
+         * The preview1 functions for a core module.
+         *
          * @return array{wasi_snapshot_preview1: array<string, \Wasm\Func>}
          */
         public function getImportObject(): array {}
@@ -324,12 +329,14 @@ namespace Wasm {
         public function initialize(\Wasm\Instance $instance): void {}
 
         /**
-         * Runs `_start` and returns the exit code.
+         * Runs `_start` of a module, or `wasi:cli/run` of a component, and
+         * returns the exit code.
          *
-         * @param \Wasm\Instance $instance
+         * @param \Wasm\Instance|\Wasm\Component\Instance $instance
+         *
          * @return int
          */
-        public function start(\Wasm\Instance $instance): int {}
+        public function start(mixed $instance): int {}
 
         /**
          * @return string
@@ -368,6 +375,449 @@ namespace Wasm {
     function validate(string $bytes): bool {}
 }
 
+namespace Wasm\Component {
+    /**
+     * A compiled WebAssembly component.
+     *
+     * Compile once and instantiate as often as needed, like `Wasm\Module`.
+     */
+    class Component {
+        /**
+         * Compiles a component binary or WAT text.
+         *
+         * @param string $bytes
+         */
+        public function __construct(string $bytes) {}
+
+        /**
+         * @return list<array{name: string, kind: string, type?: string, functions?: list<array{name: string, kind: string, type?: string}>}>
+         */
+        public function exports(): array {}
+
+        /**
+         * Compiles a component file, like `new Component(file_get_contents($path))`.
+         *
+         * Reads local files only and honours open_basedir.
+         *
+         * @param string $path
+         * @return \Wasm\Component\Component
+         */
+        public static function fromFile(string $path): \Wasm\Component\Component {}
+
+        /**
+         * @return list<array{name: string, kind: string, type?: string, functions?: list<array{name: string, kind: string, type?: string}>}>
+         */
+        public function imports(): array {}
+    }
+
+    /**
+     * The exports of a component instance, or of one interface it exports.
+     *
+     * Functions are camelCase methods; `get()` takes any export by its WIT name,
+     * with or without version.
+     */
+    class Exports implements \IteratorAggregate {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        public function __construct() {}
+
+        /**
+         * @return \Wasm\Component\Func|\Wasm\Component\Exports
+         *
+         * @param string $name
+         */
+        public function get(string $name): mixed {}
+
+        /**
+         * Every export by WIT name. An aggregate rather than an Iterator, so WIT
+         * functions called next or current stay callable as methods.
+         *
+         * @return \Wasm\Component\ExportsIterator
+         */
+        public function getIterator(): \Wasm\Component\ExportsIterator {}
+    }
+
+    /**
+     * Iterates the exports of a component instance by WIT name.
+     */
+    class ExportsIterator implements \Iterator {
+        public function __construct() {}
+
+        /**
+         * @return \Wasm\Component\Func|\Wasm\Component\Exports|null
+         */
+        public function current(): mixed {}
+
+        /**
+         * @return string|null
+         */
+        public function key(): ?string {}
+
+        /**
+         * @return void
+         */
+        public function next(): void {}
+
+        /**
+         * @return void
+         */
+        public function rewind(): void {}
+
+        /**
+         * @return bool
+         */
+        public function valid(): bool {}
+    }
+
+    /**
+     * An exported component function, callable from PHP.
+     */
+    class Func {
+        public function __construct() {}
+
+        /**
+         * @param mixed $args
+         * @return mixed
+         */
+        public function __invoke(mixed ...$args): mixed {}
+
+        /**
+         * The function's WIT type.
+         *
+         * @return \Wasm\Component\Type\FunctionType
+         */
+        public function type(): mixed {}
+    }
+
+    /**
+     * An instance of a component, with a store of its own.
+     */
+    class Instance {
+        public readonly mixed $exports = null;
+
+        /**
+         * @param array<string, callable|array<string, callable>>|null $imports
+         * @param \Wasm\Wasi|null $wasi provides every `wasi:*` import, as WASI preview2
+         *
+         * @param \Wasm\Component\Component $component
+         */
+        public function __construct(\Wasm\Component\Component $component, ?array $imports = null, ?\Wasm\Wasi $wasi = null) {}
+
+        /**
+         * Hands `request` to the component's `wasi:http/incoming-handler` and
+         * returns its response.
+         *
+         * @param \Wasm\Component\Http\Request $request
+         * @return \Wasm\Component\Http\Response
+         */
+        public function handle(\Wasm\Component\Http\Request $request): \Wasm\Component\Http\Response {}
+    }
+
+    /**
+     * A handle to a resource owned by a component instance. Methods call the
+     * component; `drop()` releases the handle, as does the destructor.
+     */
+    class Resource {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        /**
+         * @return void
+         */
+        public function __clone(): void {}
+
+        public function __construct() {}
+
+        /**
+         * Calls the method `name` by its WIT name, for a method called `drop`.
+         *
+         * @param string $name
+         * @param mixed $args
+         * @return mixed
+         */
+        public function call(string $name, mixed ...$args): mixed {}
+
+        /**
+         * Releases the handle; the component runs its destructor for the resource.
+         *
+         * @return void
+         */
+        public function drop(): void {}
+    }
+
+    /**
+     * A resource type a component exports: `new(...)` constructs it, and its
+     * static functions are camelCase methods.
+     */
+    class ResourceClass {
+        /**
+         * @param string $name
+         * @param array $arguments
+         * @return mixed
+         */
+        public function __call(string $name, array $arguments): mixed {}
+
+        /**
+         * @return void
+         */
+        public function __clone(): void {}
+
+        public function __construct() {}
+
+        /**
+         * Calls the resource's constructor.
+         *
+         * @param mixed $args
+         * @return mixed
+         */
+        public function new(mixed ...$args): mixed {}
+    }
+
+    /**
+     * A value of a WIT `result` inside another value: ok with a value, or err
+     * with a payload.
+     */
+    class Result {
+        /**
+         * Whether this is an ok result, as a property for var_dump() and assertEquals().
+         *
+         * @var bool
+         */
+        public readonly bool $ok;
+
+        /**
+         * The ok value or the err payload, as a property for var_dump() and assertEquals().
+         *
+         * @var mixed
+         */
+        public readonly mixed $payload = null;
+
+        public function __construct() {}
+
+        /**
+         * @param mixed $error
+         * @return \Wasm\Component\Result
+         */
+        public static function err(mixed $error = null): \Wasm\Component\Result {}
+
+        /**
+         * The err payload; throws for an ok result.
+         *
+         * @return mixed
+         */
+        public function error(): mixed {}
+
+        /**
+         * @return bool
+         */
+        public function isErr(): bool {}
+
+        /**
+         * @return bool
+         */
+        public function isOk(): bool {}
+
+        /**
+         * @param mixed $value
+         * @return \Wasm\Component\Result
+         */
+        public static function ok(mixed $value = null): \Wasm\Component\Result {}
+
+        /**
+         * The ok value; throws the err payload as a ComponentError.
+         *
+         * @return mixed
+         */
+        public function value(): mixed {}
+    }
+
+    /**
+     * A value of a WIT `variant`: the name of its case and the case's payload.
+     */
+    class Variant {
+        public readonly string $tag;
+
+        public readonly mixed $value = null;
+
+        /**
+         * @param string $tag
+         * @param mixed $value
+         */
+        public function __construct(string $tag, mixed $value = null) {}
+    }
+}
+
+namespace Wasm\Component\Http {
+    /**
+     * An HTTP request for a component, like `new Request('GET', 'https://example.com/')`.
+     *
+     * Header names are lowercase and every name maps to a list of values.
+     */
+    class Request {
+        public readonly string $body;
+
+        /**
+         * @return array<string, list<string>>
+         *
+         * @var mixed
+         */
+        public readonly mixed $headers = null;
+
+        public readonly string $method;
+
+        public readonly string $url;
+
+        /**
+         * @param array<string, string|list<string>>|null $headers
+         *
+         * @param string $method
+         * @param string $url
+         * @param string|null $body
+         */
+        public function __construct(string $method, string $url, ?array $headers = null, ?string $body = null) {}
+    }
+
+    /**
+     * The HTTP response of a component.
+     */
+    class Response {
+        public readonly string $body;
+
+        /**
+         * @return array<string, list<string>>
+         *
+         * @var mixed
+         */
+        public readonly mixed $headers = null;
+
+        public readonly int $status;
+
+        /**
+         * @param array<string, string|list<string>>|null $headers
+         *
+         * @param int $status
+         * @param string|null $body
+         */
+        public function __construct(int $status, ?array $headers = null, ?string $body = null) {}
+    }
+}
+
+namespace Wasm\Component\Type {
+    /**
+     * A WIT function type: its parameters by name and its result.
+     */
+    class FunctionType {
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType>
+         *
+         * @var mixed
+         */
+        public readonly mixed $params = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $result = null;
+
+        public function __construct() {}
+
+        /**
+         * The type as WIT, like `func(markdown: string) -> string`.
+         *
+         * @return string
+         */
+        public function __toString(): string {}
+    }
+
+    /**
+     * A WIT value type. `kind` is the WIT keyword; the other properties are set
+     * for the kinds they belong to and null otherwise. `map`, `future`, `stream`
+     * and fixed-length lists only report their kind: components using them do
+     * not compile yet.
+     */
+    class ValueType {
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType|null>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $cases = null;
+
+        /**
+         * The element of a list, or the value of an option.
+         *
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $element = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $err = null;
+
+        /**
+         * @return array<string, \Wasm\Component\Type\ValueType>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $fields = null;
+
+        public readonly string $kind;
+
+        /**
+         * The name the component gives the type, if any.
+         *
+         * @var string|null
+         */
+        public readonly ?string $name = null;
+
+        /**
+         * @return list<string>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $names = null;
+
+        /**
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $ok = null;
+
+        /**
+         * The resource of an own or borrow handle.
+         *
+         * @var string|null
+         */
+        public readonly ?string $resource = null;
+
+        /**
+         * @return list<\Wasm\Component\Type\ValueType>|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $types = null;
+
+        public function __construct() {}
+    }
+}
+
 namespace Wasm\Exception {
     class CompileError extends \Wasm\Exception\WasmException {
         /**
@@ -376,6 +826,22 @@ namespace Wasm\Exception {
          * @param mixed $previous
          */
         public function __construct(?string $message = null, ?int $code = null, mixed $previous = null) {}
+    }
+
+    /**
+     * The err of a component function whose own return type is a `result`.
+     *
+     * A PHP import throws it to return an err to the component.
+     *
+     * @property mixed $payload
+     */
+    class ComponentError extends \Wasm\Exception\WasmException {
+        public $payload = null;
+
+        /**
+         * @param mixed $payload
+         */
+        public function __construct(mixed $payload = null) {}
     }
 
     class LinkError extends \Wasm\Exception\WasmException {

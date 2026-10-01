@@ -2,7 +2,7 @@
 // parameter name, and its macro expands the name outside the function.
 #![allow(non_snake_case)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ext_php_rs::binary::Binary;
@@ -14,33 +14,45 @@ use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ArrayKey, ZendHashTable, Zval};
 use wasmtime::Linker;
+use wasmtime::component::{ResourceTable, Val};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
 
+use crate::component::http::{self, HostRule, WasiHttp};
+use crate::component::instance::Instance as ComponentInstance;
 use crate::engine::engine;
 use crate::error::{error, runtime_error, type_error, value_error};
 use crate::func::{self, Func};
 use crate::instance::Instance;
-use crate::store::{self, HostState, SharedStore};
+use crate::store::{self, HostState, SharedStore, WasiP2};
 use crate::throw::call_error;
+use crate::value::{debug_type, downcast};
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 
-/// A WASI preview1 environment for one run of one module, like Node's `WASI`.
+/// A WASI environment for one run of one module or component, like Node's `WASI`.
 ///
-/// Nothing of the host is visible to the module except what is passed here:
+/// Nothing of the host is visible to the program except what is passed here:
 /// no environment, no stdio and no files outside the preopened directories.
-/// stdout and stderr are captured and read after the run.
+/// stdout and stderr are captured and read after the run. A core module gets
+/// WASI preview1 through `getImportObject()`, a component gets preview2 when
+/// the Wasi object is passed to `Wasm\Component\Instance`.
 #[php_class]
 #[php(name = "Wasm\\Wasi")]
 #[php(flags = ClassFlags::Final)]
 pub struct Wasi {
     store: SharedStore,
-    imports: ZBox<ZendHashTable>,
+    /// Built on first use, as preview1 or preview2, because it builds once.
+    builder: RefCell<Option<WasiCtxBuilder>>,
+    imports: RefCell<Option<ZBox<ZendHashTable>>>,
+    /// The store of the component instance this object was given to.
+    component: RefCell<Option<SharedStore>>,
     stdout: MemoryOutputPipe,
     stderr: MemoryOutputPipe,
     output_limit: usize,
     used: Cell<bool>,
+    /// The hosts a component may send HTTP requests to; `None` links no wasi:http.
+    http_hosts: Option<Vec<HostRule>>,
 }
 
 #[php_impl]
@@ -49,13 +61,16 @@ impl Wasi {
     /// @param array<string, string>|null $env
     /// @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
     /// @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
+    /// @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
     pub fn __construct(
         args: Option<Vec<String>>,
         env: Option<&ZendHashTable>,
         preopens: Option<&ZendHashTable>,
         stdin: Option<BinarySlice<u8>>,
         outputLimit: Option<i64>,
+        httpHosts: Option<&ZendHashTable>,
     ) -> PhpResult<Self> {
+        let http_hosts = httpHosts.map(http::parse_hosts).transpose()?;
         let output_limit = match outputLimit {
             None => DEFAULT_OUTPUT_LIMIT,
             Some(limit) => usize::try_from(limit)
@@ -114,26 +129,48 @@ impl Wasi {
         ));
         builder.stdout(stdout.clone()).stderr(stderr.clone());
 
-        let store = store::new();
-        store.with(|mut ctx| ctx.data_mut().wasi = Some(builder.build_p1()));
-        let imports = import_object(&store)?;
         Ok(Self {
-            store,
-            imports,
+            store: store::new(),
+            builder: RefCell::new(Some(builder)),
+            imports: RefCell::new(None),
+            component: RefCell::new(None),
             stdout,
             stderr,
             output_limit,
             used: Cell::new(false),
+            http_hosts,
         })
     }
 
+    /// The preview1 functions for a core module.
+    ///
     /// @return array{wasi_snapshot_preview1: array<string, \Wasm\Func>}
-    pub fn get_import_object(&self) -> ZBox<ZendHashTable> {
-        self.imports.clone()
+    pub fn get_import_object(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        if let Some(imports) = self.imports.borrow().as_ref() {
+            return Ok(imports.clone());
+        }
+        let mut builder = self.take_builder()?;
+        self.store
+            .with(|mut ctx| ctx.data_mut().wasi = Some(builder.build_p1()));
+        let imports = import_object(&self.store)?;
+        *self.imports.borrow_mut() = Some(imports.clone());
+        Ok(imports)
     }
 
-    /// Runs `_start` and returns the exit code.
-    pub fn start(&self, instance: &Instance) -> PhpResult<i64> {
+    /// Runs `_start` of a module, or `wasi:cli/run` of a component, and
+    /// returns the exit code.
+    ///
+    /// @param \Wasm\Instance|\Wasm\Component\Instance $instance
+    pub fn start(&self, instance: &Zval) -> PhpResult<i64> {
+        if let Some(component) = downcast::<ComponentInstance>(instance) {
+            return self.start_component(component);
+        }
+        let instance = downcast::<Instance>(instance).ok_or_else(|| {
+            type_error(format!(
+                "Wasm\\Wasi::start(): Argument #1 ($instance) must be of type Wasm\\Instance|Wasm\\Component\\Instance, {} given",
+                debug_type(instance)
+            ))
+        })?;
         let func = self
             .entry(instance, "_start")?
             .ok_or_else(|| type_error("the instance has no _start export"))?;
@@ -176,7 +213,75 @@ impl Wasi {
     }
 }
 
+const ONE_RUN: &str = "a Wasm\\Wasi object runs one module once; create a new one";
+
 impl Wasi {
+    fn take_builder(&self) -> PhpResult<WasiCtxBuilder> {
+        self.builder
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| error(ONE_RUN))
+    }
+
+    /// Gives the preview2 context to the store of a new component instance.
+    pub fn attach(&self, store: &SharedStore) -> PhpResult<()> {
+        let mut builder = self.take_builder()?;
+        let wasi = WasiP2 {
+            ctx: builder.build(),
+            table: ResourceTable::new(),
+        };
+        let http = self
+            .http_hosts
+            .clone()
+            .map(|rules| WasiHttp::new(rules, socket_timeout()));
+        store.with(|mut ctx| {
+            let state = ctx.data_mut();
+            state.wasi_p2 = Some(wasi);
+            state.http = http;
+        });
+        *self.component.borrow_mut() = Some(store.clone());
+        Ok(())
+    }
+
+    /// Whether components given this object get wasi:http.
+    pub fn allows_http(&self) -> bool {
+        self.http_hosts.is_some()
+    }
+
+    fn start_component(&self, instance: &ComponentInstance) -> PhpResult<i64> {
+        let store = self
+            .component
+            .borrow()
+            .clone()
+            .filter(|store| Rc::ptr_eq(store, instance.store()))
+            .ok_or_else(|| store::mismatch("Instance"))?;
+        if store.is_parked() {
+            return Err(store::busy());
+        }
+        if self.used.get() {
+            return Err(error(ONE_RUN));
+        }
+        let run = instance
+            .func("wasi:cli/run", "run")
+            .ok_or_else(|| type_error("the component exports no wasi:cli/run"))?;
+        self.used.set(true);
+        let code = store.with(|mut ctx| {
+            let mut results = [Val::Bool(false)];
+            match crate::component::func::run(&store, &mut ctx, run, &[], &mut results) {
+                Ok(()) => Ok(match results[0] {
+                    Val::Result(Ok(_)) => 0,
+                    _ => 1,
+                }),
+                Err(err) => match err.downcast_ref::<I32Exit>() {
+                    Some(exit) => Ok(i64::from(exit.0)),
+                    None => Err(call_error(&mut ctx, err)),
+                },
+            }
+        })?;
+        self.check_output()?;
+        Ok(code)
+    }
+
     /// The entry point `name` of an instance in this Wasi's store.
     fn entry(&self, instance: &Instance, name: &str) -> PhpResult<Option<wasmtime::Func>> {
         if self.store.is_parked() {
@@ -187,9 +292,7 @@ impl Wasi {
             return Err(store::mismatch("Instance"));
         }
         if self.used.get() {
-            return Err(error(
-                "a Wasm\\Wasi object runs one module once; create a new one",
-            ));
+            return Err(error(ONE_RUN));
         }
         Ok(exports.func(name))
     }
@@ -243,4 +346,17 @@ fn import_object(store: &SharedStore) -> PhpResult<ZBox<ZendHashTable>> {
     let mut object = ZendHashTable::new();
     object.insert("wasi_snapshot_preview1", namespace)?;
     Ok(object)
+}
+
+/// PHP's default_socket_timeout, which also bounds the requests of components.
+pub(crate) fn socket_timeout() -> Option<std::time::Duration> {
+    let settings = ext_php_rs::zend::ExecutorGlobals::get().ini_values();
+    let seconds: f64 = settings
+        .get("default_socket_timeout")
+        .cloned()
+        .flatten()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(60.0);
+    // A negative or zero timeout means no limit in PHP.
+    (seconds > 0.0).then(|| std::time::Duration::from_secs_f64(seconds))
 }

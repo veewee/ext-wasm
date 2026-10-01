@@ -66,13 +66,15 @@ exception_constructor!(WasmException, CompileError, LinkError, RuntimeError);
 pub fn adopt_exception_behaviour() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
+        crate::component::value::install_comparison();
         let base: *const ClassEntry = ce::exception();
-        let classes: [*const ClassEntry; 5] = [
+        let classes: [*const ClassEntry; 6] = [
             WasmException::get_metadata().ce(),
             CompileError::get_metadata().ce(),
             LinkError::get_metadata().ce(),
             RuntimeError::get_metadata().ce(),
             crate::throw::class_entry(),
+            crate::component::error::class_entry(),
         ];
         // SAFETY: internal class entries live for the whole process, no PHP code
         // has run yet in this request, and `ONCE` makes this the only writer.
@@ -90,6 +92,8 @@ pub fn adopt_exception_behaviour() {
                 if std::ptr::eq(class.cast_const(), crate::throw::class_entry()) {
                     // Keeps the declared (Tag $tag, array $payload) signature.
                     ours.internal_function.handler = Some(crate::throw::construct);
+                } else if std::ptr::eq(class.cast_const(), crate::component::error::class_entry()) {
+                    ours.internal_function.handler = Some(crate::component::error::construct);
                 } else if let Some(theirs) = (*base).constructor.as_ref() {
                     ours.internal_function.handler = theirs.internal_function.handler;
                 }

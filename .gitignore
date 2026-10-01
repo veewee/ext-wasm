@@ -7,9 +7,15 @@ tools/*.phar binary
 /examples/python/dist/
 /examples/quickjs/dist/
 /examples/rust-markdown/target/
+/examples/link-preview/target/
 /examples/oxipng/dist/
 /examples/html/target/
 /examples/typst/target/
 /examples/typst/dist/
 /examples/async/vendor/
 /examples/async/composer.lock
+/tests/fixtures/component-wasi/target/
+/tests/fixtures/component-http/target/
+/tests/fixtures/component-resources/*/target/
+/tests/fixtures/component-http-handler/target/
+/tests/fixtures/component-http-handler-async/target/

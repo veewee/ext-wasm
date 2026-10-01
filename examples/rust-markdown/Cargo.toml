@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pulldown-cmark = { version = "=0.13.4", default-features = false, features = ["html"] }
+wit-bindgen = "=0.62.0"
 
 [profile.release]
 opt-level = "z"
