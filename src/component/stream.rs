@@ -18,13 +18,13 @@ use ext_php_rs::zend::ce;
 use wasmtime::StoreContextMut;
 use wasmtime::component::types::Type;
 use wasmtime::component::{
-    Destination, Source, StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult,
-    Val, VecBuffer,
+    Destination, FutureAny, FutureConsumer, FutureReader, Source, StreamAny, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult, Val, VecBuffer,
 };
 
 use crate::component::value::scalar;
 use crate::error::runtime_error;
-use crate::store::{self, Active, HostState, SharedStore, ValueKey};
+use crate::store::{self, Active, HostState, SharedStore, Unread, ValueKey};
 use crate::suspend::{Callee, Request};
 use crate::value::{ConvertError, debug_type};
 
@@ -385,6 +385,97 @@ macro_rules! payloads {
             }
         }
 
+        /// A piped future, by payload type.
+        enum Awaiting {
+            $($variant(Arc<Mutex<Settled<$ty>>>)),*
+        }
+
+        impl Awaiting {
+            fn start(
+                ctx: &mut StoreContextMut<'_, HostState>,
+                future: FutureAny,
+                element: &Type,
+            ) -> wasmtime::Result<Self> {
+                match element {
+                    $($kind => {
+                        let settled = Arc::new(Mutex::new(Settled { value: None, ended: false, reader: None }));
+                        future
+                            .try_into_future_reader::<$ty>()?
+                            .pipe(&mut *ctx, Take(settled.clone()))?;
+                        Ok(Self::$variant(settled))
+                    })*
+                    other => Err(wasmtime::Error::msg(format!(
+                        "futures of {} are not supported yet",
+                        crate::component::wit_type(other)
+                    ))),
+                }
+            }
+
+            /// `Some` once settled: the value, or `None` when the future closed without one.
+            fn settled(&self) -> Option<Option<Zval>> {
+                match self {
+                    $(Self::$variant(settled) => {
+                        let mut settled = settled.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        match settled.value.take() {
+                            Some(value) => Some(Some(value.to_zval())),
+                            None => settled.ended.then_some(None),
+                        }
+                    })*
+                }
+            }
+
+            fn waiter(&self) -> FutureWaiter {
+                match self {
+                    $(Self::$variant(settled) => FutureWaiter::$variant(settled.clone())),*
+                }
+            }
+        }
+
+        enum FutureWaiter {
+            $($variant(Arc<Mutex<Settled<$ty>>>)),*
+        }
+
+        impl FutureWaiter {
+            fn arrived(&self, cx: &Context<'_>) -> Poll<()> {
+                match self {
+                    $(Self::$variant(settled) => {
+                        let mut settled = settled.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if settled.value.is_some() || settled.ended {
+                            return Poll::Ready(());
+                        }
+                        settled.reader = Some(cx.waker().clone());
+                        Poll::Pending
+                    })*
+                }
+            }
+        }
+
+        fn supports_future(element: &Type) -> bool {
+            matches!(element, $($kind)|*)
+        }
+
+        /// A component future that is ready at once with a PHP value.
+        pub fn ready_future(
+            ctx: &mut StoreContextMut<'_, HostState>,
+            value: &Zval,
+            element: Option<Type>,
+        ) -> Result<Val, ConvertError> {
+            let runtime = |err: wasmtime::Error| ConvertError::Runtime(format!("{err:#}"));
+            match &element {
+                $(Some(element @ $kind) => {
+                    let value = <$ty as Item>::from_val(scalar(value, element)?)
+                        .ok_or_else(|| ConvertError::Runtime("unexpected value".into()))?;
+                    let reader = FutureReader::new(&mut *ctx, std::future::ready(Ok::<_, wasmtime::Error>(value)))
+                        .map_err(runtime)?;
+                    Ok(Val::Future(reader.try_into_future_any(&mut *ctx).map_err(runtime)?))
+                })*
+                _ => Err(ConvertError::Runtime(format!(
+                    "futures of {} are not supported yet",
+                    element.map_or_else(|| "nothing".to_string(), |ty| crate::component::wit_type(&ty))
+                ))),
+            }
+        }
+
         /// A component stream fed by a PHP iterable.
         pub fn feed(
             ctx: &mut StoreContextMut<'_, HostState>,
@@ -617,6 +708,161 @@ fn advance<T: Item>(iterator: &Zval, shared: &Arc<Mutex<FeedInner<T>>>, element:
     }
 }
 
+/// The value of a component future, once it arrived.
+struct Settled<T> {
+    value: Option<T>,
+    /// The future closed, with or without a value.
+    ended: bool,
+    reader: Option<Waker>,
+}
+
+/// Takes the value of a component future.
+struct Take<T>(Arc<Mutex<Settled<T>>>);
+
+impl<T> Drop for Take<T> {
+    fn drop(&mut self) {
+        let waker = {
+            let mut settled = self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settled.ended = true;
+            settled.reader.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl<T: wasmtime::component::Lift + Send + 'static> FutureConsumer<HostState> for Take<T> {
+    type Item = T;
+
+    fn poll_consume(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        store: StoreContextMut<'_, HostState>,
+        mut source: Source<'_, T>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<()>> {
+        let mut value = None;
+        source.read(store, &mut value)?;
+        let waker = {
+            let mut settled = self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settled.value = value;
+            settled.reader.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+enum Pending {
+    /// Not awaited yet, so it can still be closed without the event loop.
+    Unread(FutureAny, Type),
+    Awaiting(Awaiting),
+    Settled(Zval),
+}
+
+/// A `future<T>` a component returned. `await()` runs the component until
+/// its value is there and returns it, the same value on every call.
+#[php_class]
+#[php(name = "Wasm\\Component\\Future")]
+#[php(flags = ClassFlags::Final)]
+pub struct Future {
+    store: SharedStore,
+    state: RefCell<Pending>,
+}
+
+impl Future {
+    /// The PHP value of a future the component handed over.
+    pub fn lift(
+        ctx: &mut StoreContextMut<'_, HostState>,
+        future: &FutureAny,
+        element: Option<Type>,
+    ) -> Result<Zval, ConvertError> {
+        let Some(element) = element.clone().filter(supports_future) else {
+            let mut future = future.clone();
+            let _ = future.close(&mut *ctx);
+            return Err(ConvertError::Runtime(format!(
+                "futures of {} are not supported yet",
+                element.map_or_else(
+                    || "nothing".to_string(),
+                    |ty| crate::component::wit_type(&ty)
+                )
+            )));
+        };
+        Self {
+            store: store::of(&*ctx),
+            state: RefCell::new(Pending::Unread(future.clone(), element)),
+        }
+        .into_zval(false)
+        .map_err(|err| ConvertError::Value(err.to_string()))
+    }
+}
+
+#[php_impl]
+impl Future {
+    /// The value of the future, once the component wrote it.
+    #[php(name = "await")]
+    pub fn await_(&self) -> PhpResult<Zval> {
+        if self.store.is_parked() {
+            return Err(store::busy());
+        }
+        let mut state = self.state.borrow_mut();
+        loop {
+            match &*state {
+                Pending::Settled(value) => return Ok(value.shallow_clone()),
+                Pending::Unread(future, element) => {
+                    let (future, element) = (future.clone(), element.clone());
+                    let awaiting = self
+                        .store
+                        .with(|mut ctx| Awaiting::start(&mut ctx, future, &element))
+                        .map_err(runtime_error)?;
+                    *state = Pending::Awaiting(awaiting);
+                }
+                Pending::Awaiting(awaiting) => match awaiting.settled() {
+                    Some(Some(value)) => *state = Pending::Settled(value),
+                    Some(None) => {
+                        return Err(runtime_error(wasmtime::Error::msg(
+                            "the component closed the future without a value",
+                        )));
+                    }
+                    None => {
+                        let waiter = awaiting.waiter();
+                        let store = self.store.clone();
+                        self.store
+                            .with(|ctx| {
+                                crate::suspend::drive_until_idle(
+                                    &store,
+                                    ctx.run_concurrent(async move |_| {
+                                        std::future::poll_fn(|cx| waiter.arrived(cx)).await
+                                    }),
+                                )
+                            })
+                            .map_err(runtime_error)?;
+                    }
+                },
+            }
+        }
+    }
+}
+
+impl Drop for Future {
+    fn drop(&mut self) {
+        if let Pending::Unread(future, _) =
+            std::mem::replace(self.state.get_mut(), Pending::Settled(Zval::null()))
+        {
+            self.store.close_unread(Unread::Future(future));
+        }
+    }
+}
+
 enum State {
     /// Not read yet, so it can still be closed without the event loop.
     Unread(StreamAny, Type),
@@ -754,7 +1000,7 @@ impl Stream {
 impl Drop for Stream {
     fn drop(&mut self) {
         match std::mem::replace(self.state.get_mut(), State::Ended) {
-            State::Unread(stream, _) => self.store.close_stream(stream),
+            State::Unread(stream, _) => self.store.close_unread(Unread::Stream(stream)),
             State::Reading(pipe) => pipe.close(),
             State::Ended => {}
         }

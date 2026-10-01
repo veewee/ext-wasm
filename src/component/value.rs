@@ -197,6 +197,9 @@ pub fn to_val(
     if let Type::Stream(stream) = ty {
         return crate::component::stream::feed(ctx, value, stream.ty());
     }
+    if let Type::Future(future) = ty {
+        return crate::component::stream::ready_future(ctx, value, future.ty());
+    }
     Ok(match ty {
         Type::List(list) if matches!(list.ty(), Type::U8) => Val::List(
             value
@@ -465,6 +468,9 @@ pub fn from_val(
         }
         (Val::Stream(stream), Type::Stream(ty)) => {
             return crate::component::stream::Stream::lift(ctx, stream, ty.ty());
+        }
+        (Val::Future(future), Type::Future(ty)) => {
+            return crate::component::stream::Future::lift(ctx, future, ty.ty());
         }
         (Val::Flags(set), Type::Flags(flags)) => {
             let mut table = ZendHashTable::new();

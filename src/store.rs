@@ -220,8 +220,8 @@ pub struct StoreHandle {
     /// Component resource handles released while the store was in use, for
     /// example by a PHP destructor during a call. Dropped after the call.
     pending_drops: RefCell<Vec<wasmtime::component::ResourceAny>>,
-    /// Component streams PHP dropped unread while the store was in use.
-    pending_closes: RefCell<Vec<wasmtime::component::StreamAny>>,
+    /// Component streams and futures PHP dropped unread while the store was in use.
+    pending_closes: RefCell<Vec<Unread>>,
     /// Whether the store runs WASI, whose functions need the tokio runtime
     /// entered while wasm runs.
     uses_wasi: Cell<bool>,
@@ -231,6 +231,12 @@ pub struct StoreHandle {
 }
 
 pub type SharedStore = Rc<StoreHandle>;
+
+/// A component stream or future PHP dropped before reading it.
+pub enum Unread {
+    Stream(wasmtime::component::StreamAny),
+    Future(wasmtime::component::FutureAny),
+}
 
 /// What a running host function received from wasmtime: a core function gets
 /// a `Caller`, a component function a `StoreContextMut`.
@@ -434,12 +440,12 @@ impl StoreHandle {
         }
     }
 
-    /// Closes a component stream PHP dropped unread, or queues it until the
-    /// store is free, like `drop_resource`.
-    pub fn close_stream(&self, stream: wasmtime::component::StreamAny) {
+    /// Closes a component stream or future PHP dropped unread, or queues it
+    /// until the store is free, like `drop_resource`.
+    pub fn close_unread(&self, unread: Unread) {
         let busy =
             !matches!(self.active.get(), Active::None) || self.store.try_borrow_mut().is_err();
-        self.pending_closes.borrow_mut().push(stream);
+        self.pending_closes.borrow_mut().push(unread);
         if !busy {
             self.drop_pending_resources();
         }
@@ -453,9 +459,12 @@ impl StoreHandle {
                 return;
             }
             let mut store = self.store.borrow_mut();
-            for mut stream in closes {
-                // A stream of an instance that trapped is freed with the store.
-                let _ = stream.close(&mut *store);
+            for unread in closes {
+                // One of an instance that trapped is freed with the store.
+                let _ = match unread {
+                    Unread::Stream(mut stream) => stream.close(&mut *store),
+                    Unread::Future(mut future) => future.close(&mut *store),
+                };
             }
             let is_async = store.data().is_async;
             for handle in pending {

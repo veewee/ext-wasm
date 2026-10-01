@@ -7,6 +7,7 @@ namespace Test;
 use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
 use Wasm\Component\Exports;
+use Wasm\Component\Future;
 use Wasm\Component\Instance;
 use Wasm\Component\Stream;
 use Wasm\Exception\RuntimeError;
@@ -262,6 +263,34 @@ final class ComponentAsyncTest extends TestCase
             yield 1;
             yield 'two';
         })());
+    }
+
+    public function test_a_future_returned_by_a_call_is_awaited(): void
+    {
+        $future = self::demo(fn (int $n): int => $n)->greetLater('ada');
+
+        self::assertInstanceOf(Future::class, $future);
+        self::assertSame('hello, ada', $future->await());
+        self::assertSame('hello, ada', $future->await());
+    }
+
+    public function test_a_value_is_a_future_that_is_ready_at_once(): void
+    {
+        self::assertSame('hi!', self::demo(fn (int $n): int => $n)->awaitValue('hi'));
+    }
+
+    public function test_a_future_dropped_unawaited_does_not_block_the_instance(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $exports->greetLater('nobody');
+
+        self::assertSame(3, $exports->run(2));
+    }
+
+    public function test_a_value_of_the_wrong_type_for_a_future_throws(): void
+    {
+        $this->expectException(\TypeError::class);
+        self::demo(fn (int $n): int => $n)->awaitValue(42);
     }
 
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void

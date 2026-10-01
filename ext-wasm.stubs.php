@@ -495,6 +495,21 @@ namespace Wasm\Component {
     }
 
     /**
+     * A `future<T>` a component returned. `await()` runs the component until
+     * its value is there and returns it, the same value on every call.
+     */
+    class Future {
+        public function __construct() {}
+
+        /**
+         * The value of the future, once the component wrote it.
+         *
+         * @return mixed
+         */
+        public function await(): mixed {}
+    }
+
+    /**
      * An instance of a component, with a store of its own.
      */
     class Instance {
