@@ -422,7 +422,7 @@ A dump holds the store's whole linear memory, so it can contain anything the gue
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and twelve larger ones:
+The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
@@ -434,6 +434,7 @@ The [examples](examples) folder has small scripts for each feature, and twelve l
 - [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
 - [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
 - [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
+- [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
 - [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
 - [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 

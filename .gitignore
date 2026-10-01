@@ -10,6 +10,7 @@ tools/*.phar binary
 /examples/link-preview/target/
 /examples/service-probe/target/
 /examples/stream-gzip/target/
+/examples/kv-server/target/
 /examples/oxipng/dist/
 /examples/html/target/
 /examples/typst/target/
