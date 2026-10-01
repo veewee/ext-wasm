@@ -408,10 +408,11 @@ namespace Wasm {
          * @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
          * @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
          * @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
+         * @param list<string>|null $tcpHosts destinations a component may open TCP connections to: "host:port", "ip:port" or "network/prefix:port", with * for any port; a host is checked by the addresses it resolves to when the component connects
          *
          * @param string|null $stdin
          */
-        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null, ?array $httpHosts = null) {}
+        public function __construct(?array $args = null, ?array $env = null, ?array $preopens = null, ?string $stdin = null, ?int $outputLimit = null, ?array $httpHosts = null, ?array $tcpHosts = null) {}
 
         /**
          * The preview1 functions for a core module.

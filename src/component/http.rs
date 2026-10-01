@@ -81,7 +81,7 @@ impl HostRule {
 }
 
 /// Splits `host:port`, keeping the colons of a bracketed IPv6 literal.
-fn split_port(entry: &str) -> Result<(&str, Option<u16>), &'static str> {
+pub(crate) fn split_port(entry: &str) -> Result<(&str, Option<u16>), &'static str> {
     let (host, port) = if let Some(rest) = entry.strip_prefix('[') {
         let (address, after) = rest.split_once(']').ok_or("has an unclosed [")?;
         if !after.is_empty() && !after.starts_with(':') {
@@ -105,7 +105,7 @@ fn split_port(entry: &str) -> Result<(&str, Option<u16>), &'static str> {
 }
 
 /// Lowercase, without the brackets of an IPv6 literal or a trailing dot.
-fn normalize(host: &str) -> String {
+pub(crate) fn normalize(host: &str) -> String {
     host.trim_start_matches('[')
         .trim_end_matches(']')
         .trim_end_matches('.')

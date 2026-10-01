@@ -20,6 +20,7 @@ use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder, p1};
 
 use crate::component::http::{self, HostRule, WasiHttp};
 use crate::component::instance::Instance as ComponentInstance;
+use crate::component::sockets;
 use crate::engine::engine;
 use crate::error::{error, runtime_error, type_error, value_error};
 use crate::func::{self, Func};
@@ -62,6 +63,7 @@ impl Wasi {
     /// @param array<string, string|array{path: string, writable?: bool}>|null $preopens guest path => host path
     /// @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
     /// @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
+    /// @param list<string>|null $tcpHosts destinations a component may open TCP connections to: "host:port", "ip:port" or "network/prefix:port", with * for any port; a host is checked by the addresses it resolves to when the component connects
     pub fn __construct(
         args: Option<Vec<String>>,
         env: Option<&ZendHashTable>,
@@ -69,8 +71,10 @@ impl Wasi {
         stdin: Option<BinarySlice<u8>>,
         outputLimit: Option<i64>,
         httpHosts: Option<&ZendHashTable>,
+        tcpHosts: Option<&ZendHashTable>,
     ) -> PhpResult<Self> {
         let http_hosts = httpHosts.map(http::parse_hosts).transpose()?;
+        let tcp_hosts = tcpHosts.map(sockets::parse_hosts).transpose()?;
         let output_limit = match outputLimit {
             None => DEFAULT_OUTPUT_LIMIT,
             Some(limit) => usize::try_from(limit)
@@ -83,6 +87,9 @@ impl Wasi {
         // File access otherwise waits for tokio worker threads, which a forked
         // child does not have. Preopens copy this flag, so it is set first.
         builder.allow_blocking_current_thread(true);
+        if let Some(rules) = tcp_hosts {
+            sockets::allow(&mut builder, rules);
+        }
         builder.args(&args.unwrap_or_default());
         for (key, value) in env.map(ZendHashTable::iter).into_iter().flatten() {
             let value = value

@@ -9,6 +9,7 @@ pub mod http_handler;
 pub mod imports;
 pub mod instance;
 pub mod resource;
+pub mod sockets;
 pub mod stream;
 pub mod types;
 pub mod value;
