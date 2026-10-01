@@ -61,6 +61,21 @@ pub fn ref_type_name(ty: &RefType) -> String {
     format!("(ref {null}{heap})")
 }
 
+/// A function type for messages, like `(i32, i64) -> (f32)`.
+pub fn signature(ty: &FuncType) -> String {
+    let list = |types: &mut dyn Iterator<Item = ValType>| {
+        types
+            .map(|ty| val_type_name(&ty))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "({}) -> ({})",
+        list(&mut ty.params()),
+        list(&mut ty.results())
+    )
+}
+
 pub fn extern_type(ty: &ExternType) -> PhpResult<ZBox<ZendHashTable>> {
     match ty {
         ExternType::Func(ty) => func_type(ty),
