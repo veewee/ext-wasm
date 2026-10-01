@@ -518,6 +518,16 @@ namespace Wasm\Component {
     }
 
     /**
+     * A WIT `error-context` a component handed over. It has nothing to read,
+     * because wasmtime 49 gives the host no access to the debug message, and a
+     * component cannot be given one back. Each one received is a new object, so
+     * neither `==` nor `===` tells whether two are the same error-context.
+     */
+    class ErrorContext {
+        public function __construct() {}
+    }
+
+    /**
      * The exports of a component instance, or of one interface it exports.
      *
      * Functions are camelCase methods; `get()` takes any export by its WIT name,

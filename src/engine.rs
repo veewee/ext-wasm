@@ -19,6 +19,7 @@ pub fn engine() -> &'static Engine {
             .wasm_simd(true)
             .wasm_exceptions(true)
             .wasm_component_model_map(true)
+            .wasm_component_model_error_context(true)
             // Off unless asked for: wasmtime then captures a dump for every
             // error leaving wasm, throwing imports and exits included.
             .coredump_on_trap(!crate::coredump::directory().is_empty());

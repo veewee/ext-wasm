@@ -120,6 +120,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<component::http_handler::Response>()
         .class::<component::value::Variant>()
         .class::<component::value::ResultValue>()
+        .class::<component::value::ErrorContext>()
         .class::<store::StoreObject>()
         .class::<suspend::Suspending>()
         .class::<wasi::Wasi>()

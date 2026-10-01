@@ -118,6 +118,15 @@ impl ResultValue {
     }
 }
 
+/// A WIT `error-context` a component handed over. It has nothing to read,
+/// because wasmtime 49 gives the host no access to the debug message, and a
+/// component cannot be given one back. Each one received is a new object, so
+/// neither `==` nor `===` tells whether two are the same error-context.
+#[php_class]
+#[php(name = "Wasm\\Component\\ErrorContext")]
+#[php(flags = ClassFlags::Final)]
+pub struct ErrorContext;
+
 /// Whether `ty` converts without the store, see `scalar`.
 pub fn is_scalar(ty: &Type) -> bool {
     matches!(
@@ -385,6 +394,14 @@ pub fn to_val(
                 Val::Resource(handle)
             }
         }
+        // wasmtime 49 counts no reference for an error-context the host lowers,
+        // so a guest dropping one that PHP passed back panics or traps in wasmtime.
+        Type::ErrorContext => {
+            return Err(ConvertError::Type(format!(
+                "a component cannot be given an error-context yet, got {}",
+                debug_type(value)
+            )));
+        }
         other => return Err(unsupported(other)),
     })
 }
@@ -519,6 +536,9 @@ pub fn from_val(
         }
         (Val::Future(future), Type::Future(ty)) => {
             return crate::component::stream::Future::lift(ctx, future, ty.ty());
+        }
+        (Val::ErrorContext(_), Type::ErrorContext) => {
+            return object(ErrorContext.into_zval(false));
         }
         (Val::Flags(set), Type::Flags(flags)) => {
             let mut table = ZendHashTable::new();
@@ -875,4 +895,70 @@ fn utf8<'a>(value: &'a Zval, ty: &Type) -> Result<&'a str, ConvertError> {
         .as_bytes();
     std::str::from_utf8(bytes)
         .map_err(|_| ConvertError::Value(format!("{} must be valid UTF-8", wit_type(ty))))
+}
+
+#[cfg(test)]
+mod tests {
+    use wasmtime::component::{Component, Linker, Val};
+    use wasmtime::{Config, Engine, Store};
+
+    /// `give` makes an error-context and keeps its handle, `take` drops the
+    /// handle it is given and `drop-mine` drops the one `give` kept.
+    const ROUND_TRIP: &str = r#"
+        (component
+          (core module $libc (memory (export "memory") 1) (data (i32.const 0) "boom"))
+          (core instance $libc (instantiate $libc))
+          (alias core export $libc "memory" (core memory $mem))
+          (core func $new (canon error-context.new (memory $mem) string-encoding=utf8))
+          (core func $drop (canon error-context.drop))
+          (core module $m
+            (import "host" "new" (func $new (param i32 i32) (result i32)))
+            (import "host" "drop" (func $drop (param i32)))
+            (global $mine (mut i32) (i32.const 0))
+            (func (export "give") (result i32)
+              (global.set $mine (call $new (i32.const 0) (i32.const 4)))
+              (global.get $mine))
+            (func (export "take") (param i32) (call $drop (local.get 0)))
+            (func (export "drop-mine") (call $drop (global.get $mine))))
+          (core instance $i (instantiate $m (with "host" (instance
+            (export "new" (func $new)) (export "drop" (func $drop))))))
+          (func (export "give") (result error-context) (canon lift (core func $i "give")))
+          (func (export "take") (param "e" error-context) (canon lift (core func $i "take")))
+          (func (export "drop-mine") (canon lift (core func $i "drop-mine"))))
+    "#;
+
+    /// The reason `to_val` refuses error-contexts: wasmtime counts no
+    /// reference for one the host passes back, so two drops of the same
+    /// error-context hit a wasmtime BUG (a panic with debug assertions, a
+    /// trap without). When this starts to fail after a wasmtime upgrade,
+    /// passing error-contexts back may have become possible.
+    #[test]
+    fn wasmtime_does_not_count_error_contexts_the_host_passes_back() {
+        let outcome = std::panic::catch_unwind(|| -> wasmtime::Result<()> {
+            let mut config = Config::new();
+            config.wasm_component_model_error_context(true);
+            let engine = Engine::new(&config)?;
+            let component = Component::new(&engine, ROUND_TRIP)?;
+            let mut store = Store::new(&engine, ());
+            let instance = Linker::new(&engine).instantiate(&mut store, &component)?;
+            let mut call = |name: &str, params: &[Val], results: &mut [Val]| {
+                let func = instance
+                    .get_func(&mut store, name)
+                    .expect("the export exists");
+                func.call(&mut store, params, results)
+            };
+            let mut given = [Val::Bool(false)];
+            call("give", &[], &mut given)?;
+            call("take", &given, &mut [])?;
+            call("drop-mine", &[], &mut [])
+        });
+        let message = match outcome {
+            Ok(result) => format!("{:?}", result.expect_err("the second drop failed")),
+            Err(panic) => panic.downcast_ref::<String>().cloned().unwrap_or_default(),
+        };
+        assert!(
+            message.contains("retrieve concurrent state for error context during drop"),
+            "{message}"
+        );
+    }
 }
