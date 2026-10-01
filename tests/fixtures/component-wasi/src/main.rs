@@ -30,6 +30,7 @@ fn main() {
         }
         Some("exit") => std::process::exit(args[2].parse().unwrap()),
         Some("tcp") => print!("{}", exchange(&args[2], &args[3])),
+        Some("udp") => print!("{}", datagram(&args[2], &args[3])),
         Some("listen") => match std::net::TcpListener::bind(args[2].as_str()) {
             Ok(_) => print!("listening"),
             Err(err) => print!("error: {:?}: {err}", err.kind()),
@@ -49,6 +50,47 @@ fn exchange(address: &str, message: &str) -> String {
         let mut reply = String::new();
         stream.read_to_string(&mut reply)?;
         Ok::<_, std::io::Error>(reply)
+    })();
+    match result {
+        Ok(reply) => format!("reply: {reply}"),
+        Err(err) => format!("error: {:?}: {err}", err.kind()),
+    }
+}
+
+/// Sends `message` to `address` and returns the first reply within two
+/// seconds, or the error with its kind. It resolves the name itself and uses
+/// an address of the socket's family, since std's send_to tries only the first
+/// address, and it polls nonblocking, since read timeouts fail on wasip2.
+fn datagram(address: &str, message: &str) -> String {
+    use std::net::{ToSocketAddrs, UdpSocket};
+    use std::time::{Duration, Instant};
+    let result = (|| {
+        let addresses: Vec<_> = address.to_socket_addrs()?.collect();
+        let target = addresses
+            .iter()
+            .find(|address| address.is_ipv4())
+            .or(addresses.first())
+            .copied()
+            .ok_or_else(|| std::io::Error::other("no address"))?;
+        let socket = UdpSocket::bind(if target.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+        socket.set_nonblocking(true)?;
+        socket.send_to(message.as_bytes(), target)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut reply = [0; 512];
+        loop {
+            match socket.recv_from(&mut reply) {
+                Ok((read, _)) => {
+                    return Ok(String::from_utf8_lossy(&reply[..read]).into_owned());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() > deadline {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no reply"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => return Err(err),
+            }
+        }
     })();
     match result {
         Ok(reply) => format!("reply: {reply}"),

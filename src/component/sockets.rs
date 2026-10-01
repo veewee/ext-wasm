@@ -1,11 +1,16 @@
-//! Outgoing TCP for components, restricted to the destinations PHP allows.
+//! Outgoing TCP and UDP for components, restricted to the destinations PHP
+//! allows.
 //!
 //! wasmtime-wasi asks before each socket operation with only an IP address
-//! and a port, since the guest resolves names itself. A name rule is therefore
-//! checked by resolving it on the host when the guest connects.
+//! and a port, since the guest resolves names itself. A TCP name rule is
+//! therefore checked by resolving it on the host when the guest connects. UDP
+//! name rules are resolved once, when the rules are set up: wasmtime-wasi
+//! reports a send whose check is still pending as sent and the refusal only on
+//! the next send (p2/udp.rs, poll_or_spawn), so every UDP check has to be
+//! ready on its first poll, and a lookup per datagram would cost too much.
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use ext_php_rs::exception::PhpResult;
@@ -17,9 +22,10 @@ use crate::component::http::{normalize, split_port};
 use crate::error::{type_error, value_error};
 use crate::value::debug_type;
 
-/// One `tcpHosts` entry: a name, an address or a network, and a port or any.
+/// One `tcpHosts` or `udpHosts` entry: a name, an address or a network, and a
+/// port or any.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TcpRule {
+pub struct Rule {
     target: Target,
     /// `None` for `*`, any port.
     port: Option<u16>,
@@ -34,9 +40,10 @@ enum Target {
 const SHAPE: &str =
     "must be a host, address or network with a port, such as db.internal:5432 or 10.0.0.0/8:*";
 
-impl TcpRule {
-    pub fn parse(entry: &str) -> Result<Self, String> {
-        let invalid = |reason: &str| format!("tcpHosts entry \"{entry}\" {reason}");
+impl Rule {
+    /// `list` names the constructor argument in errors.
+    pub fn parse(entry: &str, list: &str) -> Result<Self, String> {
+        let invalid = |reason: &str| format!("{list} entry \"{entry}\" {reason}");
         if !entry.is_ascii() {
             return Err(invalid(
                 "must be ASCII; write an international domain in punycode (xn--)",
@@ -157,7 +164,7 @@ async fn resolve(name: String, limit: Option<Duration>) -> Option<Vec<IpAddr>> {
 
 /// IP rules first, so a connect they allow waits for no lookup; then each
 /// name rule for this port, resolved now.
-async fn allowed(rules: &[TcpRule], address: SocketAddr, limit: Option<Duration>) -> bool {
+async fn allowed(rules: &[Rule], address: SocketAddr, limit: Option<Duration>) -> bool {
     let ip = address.ip().to_canonical();
     let candidates = rules.iter().filter(|rule| rule.port_matches(address));
     let mut names = Vec::new();
@@ -180,38 +187,98 @@ async fn allowed(rules: &[TcpRule], address: SocketAddr, limit: Option<Duration>
     false
 }
 
-/// Parses the `tcpHosts` constructor argument of `Wasm\Wasi`.
-pub fn parse_hosts(hosts: &ZendHashTable) -> PhpResult<Vec<TcpRule>> {
+/// Parses the `tcpHosts` or `udpHosts` constructor argument of `Wasm\Wasi`,
+/// named by `list`.
+pub fn parse_hosts(hosts: &ZendHashTable, list: &str) -> PhpResult<Vec<Rule>> {
     hosts
         .values()
         .map(|entry: &Zval| {
             let text = entry.str().filter(|_| entry.is_string()).ok_or_else(|| {
                 type_error(format!(
-                    "tcpHosts entries must be strings, got {}",
+                    "{list} entries must be strings, got {}",
                     debug_type(entry)
                 ))
             })?;
-            TcpRule::parse(text).map_err(value_error)
+            Rule::parse(text, list).map_err(value_error)
         })
         .collect()
 }
 
-/// Lets the guest connect to what `rules` allow. Lookups are only turned on
-/// with a name rule, because while on the guest can look up any name. The
+/// Resolves `name` on a thread of its own and waits at most `limit`. Called on
+/// the PHP thread, which may already be inside a tokio runtime (PHP code in a
+/// host import), where block_on would panic.
+fn resolve_now(name: &str, limit: Option<Duration>) -> Vec<IpAddr> {
+    let (sender, receiver) = mpsc::channel();
+    let owned = name.to_owned();
+    std::thread::spawn(move || {
+        let addresses = (owned.as_str(), 0)
+            .to_socket_addrs()
+            .map(|addresses| {
+                addresses
+                    .map(|address| address.ip().to_canonical())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = sender.send(addresses);
+    });
+    match limit {
+        Some(limit) => receiver.recv_timeout(limit).unwrap_or_default(),
+        None => receiver.recv().unwrap_or_default(),
+    }
+}
+
+/// UDP rules as networks and ports, with name rules resolved now.
+fn resolved(rules: &[Rule], limit: Option<Duration>) -> Vec<(IpAddr, u8, Option<u16>)> {
+    let mut networks = Vec::new();
+    for rule in rules {
+        match &rule.target {
+            Target::Network(network, prefix) => networks.push((*network, *prefix, rule.port)),
+            Target::Name(name) => {
+                for ip in resolve_now(name, limit) {
+                    networks.push((ip, if ip.is_ipv4() { 32 } else { 128 }, rule.port));
+                }
+            }
+        }
+    }
+    networks
+}
+
+/// Lets the guest connect to what `tcp` allows and exchange datagrams with what
+/// `udp` allows; a protocol without a list stays off. Lookups are only turned
+/// on with a name rule, because while on the guest can look up any name. The
 /// host's own lookups for name rules wait at most `lookup_limit`.
-pub fn allow(builder: &mut WasiCtxBuilder, rules: Vec<TcpRule>, lookup_limit: Option<Duration>) {
-    let rules: Arc<[TcpRule]> = rules.into();
+pub fn allow(
+    builder: &mut WasiCtxBuilder,
+    tcp: Option<Vec<Rule>>,
+    udp: Option<Vec<Rule>>,
+    lookup_limit: Option<Duration>,
+) {
+    let names = tcp.iter().chain(udp.iter()).flatten().any(Rule::is_name);
     builder
-        .allow_tcp(true)
-        .allow_ip_name_lookup(rules.iter().any(TcpRule::is_name));
+        .allow_tcp(tcp.is_some())
+        .allow_udp(udp.is_some())
+        .allow_ip_name_lookup(names);
+    let tcp: Arc<[Rule]> = tcp.unwrap_or_default().into();
+    let udp: Arc<[(IpAddr, u8, Option<u16>)]> =
+        resolved(&udp.unwrap_or_default(), lookup_limit).into();
     builder.socket_addr_check(move |address, use_| {
-        let rules = rules.clone();
+        let tcp = tcp.clone();
+        let udp = udp.clone();
         Box::pin(async move {
+            let ip = address.ip().to_canonical();
             match use_ {
-                // Every connect binds to the wildcard address first, which an
-                // explicit bind to it cannot be told apart from.
-                SocketAddrUse::TcpBind => address.ip().is_unspecified() && address.port() == 0,
-                SocketAddrUse::TcpConnect => allowed(&rules, address, lookup_limit).await,
+                // Every connect and send binds to the wildcard address first,
+                // which an explicit bind to it cannot be told apart from.
+                SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => {
+                    address.ip().is_unspecified() && address.port() == 0
+                }
+                SocketAddrUse::TcpConnect => allowed(&tcp, address, lookup_limit).await,
+                SocketAddrUse::UdpSend | SocketAddrUse::UdpReceive => {
+                    udp.iter().any(|&(network, prefix, port)| {
+                        port.is_none_or(|port| port == address.port())
+                            && contains(network, prefix, ip)
+                    })
+                }
                 _ => false,
             }
         })
@@ -224,7 +291,7 @@ mod tests {
 
     #[test]
     fn parses_names_addresses_and_networks() {
-        let rule = |entry| TcpRule::parse(entry).unwrap();
+        let rule = |entry| Rule::parse(entry, "tcpHosts").unwrap();
         assert_eq!(
             rule("DB.internal.:5432").target,
             Target::Name("db.internal".into())
@@ -243,11 +310,13 @@ mod tests {
     #[test]
     fn a_mapped_network_becomes_its_ipv4_network() {
         assert_eq!(
-            TcpRule::parse("[::ffff:10.0.0.0/104]:1").unwrap().target,
+            Rule::parse("[::ffff:10.0.0.0/104]:1", "tcpHosts")
+                .unwrap()
+                .target,
             Target::Network("10.0.0.0".parse().unwrap(), 8)
         );
         assert!(
-            TcpRule::parse("[::ffff:0:0/64]:1")
+            Rule::parse("[::ffff:0:0/64]:1", "tcpHosts")
                 .unwrap_err()
                 .contains("prefix")
         );
@@ -256,9 +325,9 @@ mod tests {
     #[test]
     fn numbers_libc_would_read_as_addresses_are_not_names() {
         for entry in ["127.1:80", "10.0.1:80", "0x7f.1:80", "1:80", "a\0b:80"] {
-            assert!(TcpRule::parse(entry).is_err(), "{entry}");
+            assert!(Rule::parse(entry, "tcpHosts").is_err(), "{entry}");
         }
-        assert!(TcpRule::parse("db1.internal:80").is_ok());
+        assert!(Rule::parse("db1.internal:80", "tcpHosts").is_ok());
     }
 
     #[test]
