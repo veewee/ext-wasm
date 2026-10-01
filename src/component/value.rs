@@ -232,12 +232,28 @@ pub fn to_val(
                     debug_type(value)
                 ))
             })?;
-            Val::Map(
-                table
-                    .iter()
-                    .map(|(key, item)| Ok((map_key(&key, &key_ty)?, to_val(ctx, item, &value_ty)?)))
-                    .collect::<Result<_, ConvertError>>()?,
-            )
+            // next_zval, because ext-php-rs's own key conversion panics on a
+            // string key that is not UTF-8.
+            let mut entries = table.iter();
+            let mut pairs = Vec::with_capacity(table.len());
+            while let Some((key, item)) = entries.next_zval() {
+                let key = match key.long() {
+                    Some(n) if key.is_long() => ArrayKey::Long(n),
+                    _ => ArrayKey::String(
+                        key.str()
+                            .ok_or_else(|| {
+                                ConvertError::Value(format!(
+                                    "map key {} is not valid UTF-8",
+                                    debug_type(&key)
+                                ))
+                            })?
+                            .to_string(),
+                    ),
+                };
+                let converted = map_key(&key, &key_ty).map_err(|err| keyed(&key, err))?;
+                pairs.push((converted, to_val(ctx, item, &value_ty)?));
+            }
+            Val::Map(pairs)
         }
         Type::Tuple(tuple) => {
             let items = list_array(value, ty)?;
@@ -400,6 +416,9 @@ pub fn from_val(
             return list_of(items.iter().map(|item| from_val(ctx, item, &element)));
         }
         (Val::Map(pairs), Type::Map(map)) => {
+            if !is_map_key(&map.key()) {
+                return Err(unsupported(ty));
+            }
             let value_ty = map.value();
             let mut table = ZendHashTable::new();
             for (key, item) in pairs {
@@ -702,7 +721,7 @@ fn assoc_array<'a>(
     Ok(table)
 }
 
-/// Key types a PHP array can hold. The component model allows no others, but
+/// Key types a PHP array can hold. The component model currently allows no others, but
 /// wasmparser does not check that.
 pub fn is_map_key(ty: &Type) -> bool {
     matches!(
@@ -768,6 +787,16 @@ fn php_key(key: &Val) -> Result<ArrayKey<'static>, ConvertError> {
             )));
         }
     })
+}
+
+/// Says which key a key conversion error is about, keeping its class.
+fn keyed(key: &ArrayKey<'_>, err: ConvertError) -> ConvertError {
+    let about = |message: String| format!("map key \"{key}\": {message}");
+    match err {
+        ConvertError::Type(message) => ConvertError::Type(about(message)),
+        ConvertError::Value(message) => ConvertError::Value(about(message)),
+        other => other,
+    }
 }
 
 /// PHP's rule for array keys: `0`, or an optional minus and a decimal number

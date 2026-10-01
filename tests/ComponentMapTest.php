@@ -49,6 +49,13 @@ final class ComponentMapTest extends TestCase
               (i32.store (i32.const 432) (i32.const 3))
               (i32.store (i32.const 0) (i32.const 400))
               (i32.store (i32.const 4) (i32.const 3))
+              (i32.const 0))
+            ;; map<f32, u32> with one entry 1.0: 1
+            (func (export "float-result") (result i32)
+              (f32.store (i32.const 400) (f32.const 1))
+              (i32.store (i32.const 404) (i32.const 1))
+              (i32.store (i32.const 0) (i32.const 400))
+              (i32.store (i32.const 4) (i32.const 1))
               (i32.const 0)))
           (core instance $i (instantiate $m))
           (alias core export $i "memory" (core memory $mem))
@@ -78,7 +85,9 @@ final class ComponentMapTest extends TestCase
           (func (export "dupes") (result (map string u32))
             (canon lift (core func $i "dupes") (memory $mem) (realloc $realloc)))
           (func (export "floats") (param "m" (map f32 u32)) (result (map f32 u32))
-            (canon lift (core func $i "pair") (memory $mem) (realloc $realloc))))
+            (canon lift (core func $i "pair") (memory $mem) (realloc $realloc)))
+          (func (export "float-result") (result (map f32 u32))
+            (canon lift (core func $i "float-result") (memory $mem) (realloc $realloc))))
         WAT;
 
     private static function exports(): Exports
@@ -145,6 +154,7 @@ final class ComponentMapTest extends TestCase
         yield 'a bool key other than 0 or 1' => ['flags', [2 => 'x'], \TypeError::class, 'bool'];
         yield 'a key out of range' => ['small', [300 => 1], \ValueError::class, 'out of range'];
         yield 'a char key of several characters' => ['chars', ['xy' => 1], \ValueError::class, 'char'];
+        yield 'a key that is not UTF-8' => ['strings', ["\xff\xfe" => 1], \ValueError::class, 'map key'];
     }
 
     /** Keys get the errors values of their type get. */
@@ -163,6 +173,74 @@ final class ComponentMapTest extends TestCase
         $this->expectExceptionMessage('map<f32, u32>');
 
         self::exports()->floats([]);
+    }
+
+    public function test_a_returned_map_with_keys_php_cannot_hold_fails_naming_its_type(): void
+    {
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('map<f32, u32>');
+
+        self::exports()->floatResult();
+    }
+
+    public function test_a_bad_key_says_it_is_a_key(): void
+    {
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('map key "x": expected int for u32');
+
+        self::exports()->numbers(['x' => 'y']);
+    }
+
+    public function test_a_php_import_receives_and_returns_maps(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (import "invert" (func $invert (param "m" (map string u32)) (result (map u32 string))))
+              (core module $m
+                (memory (export "memory") 1)
+                (global $next (mut i32) (i32.const 1024))
+                (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                  (local $p i32)
+                  (local.set $p (i32.and (i32.add (global.get $next) (i32.const 7)) (i32.const -8)))
+                  (global.set $next (i32.add (local.get $p) (local.get 3)))
+                  (local.get $p)))
+              (core instance $libc (instantiate $m))
+              (alias core export $libc "memory" (core memory $mem))
+              (alias core export $libc "realloc" (core func $realloc))
+              (core func $lowered (canon lower (func $invert) (memory $mem) (realloc $realloc)))
+              (core module $caller
+                (import "host" "invert" (func $invert (param i32 i32 i32)))
+                (func (export "run") (param i32 i32) (result i32)
+                  (call $invert (local.get 0) (local.get 1) (i32.const 16))
+                  (i32.const 16)))
+              (core instance $c (instantiate $caller (with "host" (instance (export "invert" (func $lowered))))))
+              (func (export "run") (param "m" (map string u32)) (result (map u32 string))
+                (canon lift (core func $c "run") (memory $mem) (realloc $realloc))))
+            WAT);
+        $received = null;
+        $instance = new Instance($component, ['invert' => function (array $m) use (&$received): array {
+            $received = $m;
+
+            return array_map(strval(...), array_flip($m));
+        }]);
+
+        self::assertSame([1 => 'a', 2 => '7'], $instance->exports->run(['a' => 1, '7' => 2]));
+        self::assertSame(['a' => 1, 7 => 2], $received);
+    }
+
+    public function test_the_link_check_looks_inside_map_values(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (type $point' (record (field "x" u32)))
+              (import "point" (type $point (eq $point')))
+              (import "take" (func (param "m" (map string (stream $point))))))
+            WAT);
+
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('stream<');
+
+        new Instance($component, ['take' => static fn (array $m) => null]);
     }
 
     public function test_an_import_with_keys_php_cannot_hold_is_a_link_error(): void
