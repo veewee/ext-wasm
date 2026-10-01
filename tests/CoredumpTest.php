@@ -41,10 +41,13 @@ final class CoredumpTest extends TestCase
         return $this->runPhp("<?php\n" . $code, settings: ['wasm.coredump_dir' => $directory]);
     }
 
-    /** @return list<string> */
+    /** @return list<string> the paths as the extension names them, with the platform's separator */
     private function dumps(): array
     {
-        return glob($this->directory . '/*.coredump') ?: [];
+        return array_map(
+            fn (string $file): string => $this->directory . DIRECTORY_SEPARATOR . basename($file),
+            glob($this->directory . '/*.coredump') ?: [],
+        );
     }
 
     private const CATCH = <<<'PHP'
@@ -76,7 +79,7 @@ final class CoredumpTest extends TestCase
         $dumps = $this->dumps();
         self::assertCount(1, $dumps);
         self::assertSame($without . "\ncoredump: " . $dumps[0], $output);
-        self::assertMatchesRegularExpression('/\/wasm-\d+-\d+-\d+\.coredump$/', $dumps[0]);
+        self::assertMatchesRegularExpression('/^wasm-\d+-\d+-\d+\.coredump$/', basename($dumps[0]));
         $bytes = file_get_contents($dumps[0]);
         self::assertStringStartsWith("\0asm", $bytes);
         self::assertStringContainsString('corestack', $bytes);
