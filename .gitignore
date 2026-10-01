@@ -8,6 +8,7 @@ tools/*.phar binary
 /examples/quickjs/dist/
 /examples/rust-markdown/target/
 /examples/link-preview/target/
+/examples/service-probe/target/
 /examples/stream-gzip/target/
 /examples/oxipng/dist/
 /examples/html/target/

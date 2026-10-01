@@ -1,0 +1,25 @@
+package example:service-probe@0.1.0;
+
+interface probe {
+    /// What answered on a TCP port.
+    record report {
+        /// The address the component connected to, such as 127.0.0.1:6379.
+        address: string,
+        /// SSH, SMTP, FTP, POP3, IMAP, MySQL, MariaDB, Redis, PostgreSQL,
+        /// HTTP, TLS or unknown.
+        service: string,
+        /// The banner, version or status line the service gave away.
+        detail: string,
+        /// How long the TCP connect took.
+        connect-ms: u32,
+    }
+
+    /// Connects to `target` ("host:port") and works out what listens there.
+    /// Every connect and read waits at most `timeout-ms`.
+    identify: func(target: string, timeout-ms: u32) -> result<report, string>;
+}
+
+/// Imports wasi:sockets through Rust's std::net, which wasm32-wasip2 maps to it.
+world service-probe {
+    export probe;
+}
