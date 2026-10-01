@@ -220,6 +220,25 @@ pub fn to_val(
                     .collect::<Result<_, _>>()?,
             )
         }
+        Type::Map(map) => {
+            let (key_ty, value_ty) = (map.key(), map.value());
+            if !is_map_key(&key_ty) {
+                return Err(unsupported(ty));
+            }
+            let table = value.array().ok_or_else(|| {
+                ConvertError::Type(format!(
+                    "expected array for {}, got {}",
+                    wit_type(ty),
+                    debug_type(value)
+                ))
+            })?;
+            Val::Map(
+                table
+                    .iter()
+                    .map(|(key, item)| Ok((map_key(&key, &key_ty)?, to_val(ctx, item, &value_ty)?)))
+                    .collect::<Result<_, ConvertError>>()?,
+            )
+        }
         Type::Tuple(tuple) => {
             let items = list_array(value, ty)?;
             if items.len() != tuple.types().len() {
@@ -379,6 +398,16 @@ pub fn from_val(
         (Val::List(items), Type::List(list)) => {
             let element = list.ty();
             return list_of(items.iter().map(|item| from_val(ctx, item, &element)));
+        }
+        (Val::Map(pairs), Type::Map(map)) => {
+            let value_ty = map.value();
+            let mut table = ZendHashTable::new();
+            for (key, item) in pairs {
+                table
+                    .insert(php_key(key)?, from_val(ctx, item, &value_ty)?)
+                    .map_err(|err| ConvertError::Value(err.to_string()))?;
+            }
+            return object(table.into_zval(false));
         }
         (Val::Tuple(items), Type::Tuple(tuple)) => {
             return list_of(
@@ -673,6 +702,85 @@ fn assoc_array<'a>(
     Ok(table)
 }
 
+/// Key types a PHP array can hold. The component model allows no others, but
+/// wasmparser does not check that.
+pub fn is_map_key(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Bool
+            | Type::S8
+            | Type::U8
+            | Type::S16
+            | Type::U16
+            | Type::S32
+            | Type::U32
+            | Type::S64
+            | Type::U64
+            | Type::Char
+            | Type::String
+    )
+}
+
+/// A PHP array key as a map key of type `ty`. PHP stores numeric string keys,
+/// bools and digit chars as int keys, so ints are accepted for those too.
+fn map_key(key: &ArrayKey<'_>, ty: &Type) -> Result<Val, ConvertError> {
+    let mut zval = Zval::new();
+    match (key, ty) {
+        (ArrayKey::Long(n), Type::Bool) => {
+            return match n {
+                0 | 1 => Ok(Val::Bool(*n == 1)),
+                _ => Err(ConvertError::Type(format!(
+                    "expected key 0 or 1 for a bool key, got {n}"
+                ))),
+            };
+        }
+        (ArrayKey::Long(n), Type::String | Type::Char) => set_string(&mut zval, &n.to_string())?,
+        (ArrayKey::Long(n), _) => zval.set_long(*n),
+        (key, _) => set_string(&mut zval, &key.to_string())?,
+    }
+    scalar(&zval, ty)
+}
+
+/// A map key as PHP stores it: a string that PHP would read as an integer
+/// becomes an int key, everything else stays a string. ext-php-rs converts
+/// more strings than PHP does ("-0", "+1"), so its own conversion is bypassed.
+fn php_key(key: &Val) -> Result<ArrayKey<'static>, ConvertError> {
+    let text = |text: String| match php_int_key(&text) {
+        Some(n) => ArrayKey::Long(n),
+        None => ArrayKey::String(text),
+    };
+    Ok(match key {
+        Val::String(s) => text(s.clone()),
+        Val::Char(c) => text(c.to_string()),
+        Val::Bool(b) => ArrayKey::Long(i64::from(*b)),
+        Val::S8(n) => ArrayKey::Long((*n).into()),
+        Val::U8(n) => ArrayKey::Long((*n).into()),
+        Val::S16(n) => ArrayKey::Long((*n).into()),
+        Val::U16(n) => ArrayKey::Long((*n).into()),
+        Val::S32(n) => ArrayKey::Long((*n).into()),
+        Val::U32(n) => ArrayKey::Long((*n).into()),
+        Val::S64(n) => ArrayKey::Long(*n),
+        // The bit pattern carries over, as for u64 values.
+        Val::U64(n) => ArrayKey::Long(*n as i64),
+        other => {
+            return Err(ConvertError::Runtime(format!(
+                "a map key of {other:?} is not supported"
+            )));
+        }
+    })
+}
+
+/// PHP's rule for array keys: `0`, or an optional minus and a decimal number
+/// without leading zeros, within the int range.
+fn php_int_key(text: &str) -> Option<i64> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let canonical = text == "0"
+        || (!digits.is_empty()
+            && !digits.starts_with('0')
+            && digits.bytes().all(|b| b.is_ascii_digit()));
+    canonical.then(|| text.parse().ok()).flatten()
+}
+
 fn unknown_case(name: &str, ty: &Type) -> ConvertError {
     ConvertError::Value(format!("unknown case \"{name}\" for {}", wit_type(ty)))
 }
@@ -698,7 +806,7 @@ fn php_type(ty: &Type) -> &'static str {
         Type::Char | Type::String | Type::Enum(_) => "string",
         Type::List(list) if matches!(list.ty(), Type::U8) => "string",
         Type::List(_) | Type::Tuple(_) => "list array",
-        Type::Record(_) | Type::Flags(_) => "array",
+        Type::Record(_) | Type::Flags(_) | Type::Map(_) => "array",
         Type::Variant(_) | Type::Option(_) => "Wasm\\Component\\Variant",
         Type::Result(_) => "Wasm\\Component\\Result",
         Type::Own(_) | Type::Borrow(_) => "Wasm\\Component\\Resource",

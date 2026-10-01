@@ -106,15 +106,15 @@ impl FunctionType {
 }
 
 /// A WIT value type. `kind` is the WIT keyword; the other properties are set
-/// for the kinds they belong to and null otherwise. `map`, `future`, `stream`
-/// and fixed-length lists only report their kind: components using them do
-/// not compile yet.
+/// for the kinds they belong to and null otherwise. Fixed-length lists only
+/// report their kind: components using them do not compile yet.
 #[php_class]
 #[php(name = "Wasm\\Component\\Type\\ValueType")]
 #[php(flags = ClassFlags::Final)]
 pub struct ValueType {
     kind: String,
     name: Option<String>,
+    key: Zval,
     element: Zval,
     types: Zval,
     fields: Zval,
@@ -138,7 +138,16 @@ impl ValueType {
         self.name.clone()
     }
 
-    /// The element of a list or stream, or the value of an option or future.
+    /// The key type of a map.
+    ///
+    /// @return \Wasm\Component\Type\ValueType|null
+    #[php(getter)]
+    pub fn get_key(&self) -> Zval {
+        self.key.shallow_clone()
+    }
+
+    /// The element of a list or stream, the value of an option or future, or
+    /// the value type of a map.
     ///
     /// @return \Wasm\Component\Type\ValueType|null
     #[php(getter)]
@@ -209,6 +218,7 @@ pub fn value_type(ty: &Type, names: &Names) -> PhpResult<ValueType> {
     let mut value = ValueType {
         kind: kind(ty).to_string(),
         name: names.type_name(ty).map(str::to_string),
+        key: Zval::null(),
         element: Zval::null(),
         types: Zval::null(),
         fields: Zval::null(),
@@ -225,6 +235,10 @@ pub fn value_type(ty: &Type, names: &Names) -> PhpResult<ValueType> {
     match ty {
         Type::List(list) => value.element = nested(&list.ty())?,
         Type::Option(option) => value.element = nested(&option.ty())?,
+        Type::Map(map) => {
+            value.key = nested(&map.key())?;
+            value.element = nested(&map.value())?;
+        }
         Type::Stream(stream) => {
             if let Some(element) = stream.ty() {
                 value.element = nested(&element)?;
