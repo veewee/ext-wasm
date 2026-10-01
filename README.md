@@ -48,6 +48,24 @@ php -d extension=target/release/libwasm.so your-script.php   # libwasm.dylib on 
 
 On Windows this needs nightly Rust, because ext-php-rs uses the unstable vectorcall ABI there.
 
+### Stubs for IDEs and static analysis
+
+The extension's classes and functions are described in [ext-wasm.stubs.php](ext-wasm.stubs.php), with their docblocks and array shapes. PIE installs only the extension, so copy that file into your project, from the release you installed, and point your tools at it. PhpStorm picks it up as soon as it is part of the project. PHPStan needs it under `scanFiles`, Psalm under `<stubs>`:
+
+```neon
+# phpstan.neon
+parameters:
+    scanFiles:
+        - stubs/ext-wasm.stubs.php
+```
+
+```xml
+<!-- psalm.xml -->
+<stubs>
+    <file name="stubs/ext-wasm.stubs.php" />
+</stubs>
+```
+
 ## Usage
 
 ### Modules and instances
