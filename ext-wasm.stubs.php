@@ -902,9 +902,8 @@ namespace Wasm\Component\Type {
 
     /**
      * A WIT value type. `kind` is the WIT keyword; the other properties are set
-     * for the kinds they belong to and null otherwise. `map`, `future`, `stream`
-     * and fixed-length lists only report their kind: components using them do
-     * not compile yet.
+     * for the kinds they belong to and null otherwise. Fixed-length lists only
+     * report their kind: components using them do not compile yet.
      */
     class ValueType {
         /**
@@ -915,7 +914,8 @@ namespace Wasm\Component\Type {
         public readonly mixed $cases = null;
 
         /**
-         * The element of a list or stream, or the value of an option or future.
+         * The element of a list or stream, the value of an option or future, or
+         * the value type of a map.
          *
          * @return \Wasm\Component\Type\ValueType|null
          *
@@ -936,6 +936,15 @@ namespace Wasm\Component\Type {
          * @var mixed
          */
         public readonly mixed $fields = null;
+
+        /**
+         * The key type of a map.
+         *
+         * @return \Wasm\Component\Type\ValueType|null
+         *
+         * @var mixed
+         */
+        public readonly mixed $key = null;
 
         public readonly string $kind;
 

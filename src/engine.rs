@@ -17,7 +17,8 @@ pub fn engine() -> &'static Engine {
             .wasm_function_references(true)
             .wasm_gc(true)
             .wasm_simd(true)
-            .wasm_exceptions(true);
+            .wasm_exceptions(true)
+            .wasm_component_model_map(true);
         // Mach exception ports do not survive fork(), which PHP-FPM and pcntl rely on.
         #[cfg(target_os = "macos")]
         config.macos_use_mach_ports(false);

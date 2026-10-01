@@ -227,7 +227,7 @@ $instance->exports->get('docs:markdown/render')->render('**hi**');   // an expor
 $instance->exports->renderHtml('**hi**');                            // a function the world exports
 ```
 
-`exports()` and `imports()` list every function with its WIT signature as text, such as `func(markdown: string) -> string`, and as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too. Its `params` and `result` are `Wasm\Component\Type\ValueType` objects: `kind` is the WIT keyword (`u32`, `record`, `own`, ...), and `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds. A type carries the `name` the component gives it, whatever its kind. Types are matched by shape, so an unnamed type with the same shape as a named one gets that name too. The name is left out when two names fit the same shape or the type holds a resource. This can be used, for example, to generate PHP stubs for a component. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
+`exports()` and `imports()` list every function with its WIT signature as text, such as `func(markdown: string) -> string`, and as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too. Its `params` and `result` are `Wasm\Component\Type\ValueType` objects: `kind` is the WIT keyword (`u32`, `record`, `own`, ...), and `key`, `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds (a map has its key type under `key` and its value type under `element`). A type carries the `name` the component gives it, whatever its kind. Types are matched by shape, so an unnamed type with the same shape as a named one gets that name too. The name is left out when two names fit the same shape or the type holds a resource. This can be used, for example, to generate PHP stubs for a component. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
 
 | WIT | PHP |
 |---|---|
@@ -238,6 +238,7 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 | `list<u8>` | binary string; every byte crosses as a value of its own, and about 4 MB exceeds wasmtime's copy limit for one call |
 | `list<T>`, `tuple<...>` | list array |
 | `record` | array with camelCase keys; `option` fields may be left out |
+| `map<k, v>` | array from key to value, in the map's order. Keys follow PHP's own rule: a `string` or `char` key such as `"7"` becomes the int key `7` (`"-0"` or `"07"` stay strings), and `bool` keys are `0` and `1`; such int keys are accepted again going in. A map with the same key twice keeps the last value |
 | `flags` | array of camelCase names to `bool` |
 | `enum` | its case name as a string, such as `'dark-blue'` |
 | `option<T>` | `null` or the value |
