@@ -8,7 +8,7 @@ namespace Wasm {
      *
      * Wrapper objects are created once, so `$exports->f === $exports->f` holds as in JS.
      */
-    class Exports implements \Iterator {
+    final class Exports implements \Iterator {
         /**
          * @param string $name
          * @param array $arguments
@@ -60,7 +60,7 @@ namespace Wasm {
      * A wasm function: one a module exports, or a PHP callable of a given
      * function type, like JS `new WebAssembly.Function(type, fn)`.
      */
-    class Func {
+    final class Func {
         /**
          * @param array{parameters: list<string>, results: list<string>} $type
          * @param callable $callback
@@ -92,7 +92,7 @@ namespace Wasm {
      *
      * @property mixed $value
      */
-    class GlobalVar {
+    final class GlobalVar {
         /**
          * `value` is a value type name as `type()` gives it; reference types other
          * than func and extern ones cannot hold a PHP value.
@@ -134,8 +134,8 @@ namespace Wasm {
         public function valueOf(): mixed {}
     }
 
-    class Instance {
-        public readonly mixed $exports = null;
+    final class Instance {
+        public readonly mixed $exports;
 
         /**
          * @param \Wasm\Module $module
@@ -150,7 +150,7 @@ namespace Wasm {
      *
      * PHP has no shared ArrayBuffer, so reads and writes copy bytes in and out.
      */
-    class Memory {
+    final class Memory {
         /**
          * @param array{initial?: int, minimum?: int, maximum?: int, address?: 'i32'|'i64'} $descriptor
          *
@@ -200,7 +200,7 @@ namespace Wasm {
         public function write(int $offset, string $data): void {}
     }
 
-    class Module {
+    final class Module {
         /**
          * Compiles a wasm binary or WAT text.
          *
@@ -258,7 +258,7 @@ namespace Wasm {
      * major version and ext-wasm engine settings that wasmtime accepts as
      * compatible; anything else is a CompileError.
      */
-    class Serializer {
+    final class Serializer {
         public function __construct() {}
 
         /**
@@ -311,7 +311,7 @@ namespace Wasm {
      * objects share. wasmtime frees memory one whole store at a time, when no
      * object in it is left.
      */
-    class Store {
+    final class Store {
         public function __construct() {}
     }
 
@@ -323,7 +323,7 @@ namespace Wasm {
      * into the instance's store again before the callback returns throws a
      * RuntimeError, so run one instance per Fiber.
      */
-    class Suspending {
+    final class Suspending {
         /**
          * @param mixed $callback
          */
@@ -333,7 +333,7 @@ namespace Wasm {
     /**
      * A table of references, like JS `WebAssembly.Table`.
      */
-    class Table {
+    final class Table {
         /**
          * `element` is `funcref`, `externref`, `nullfuncref`, `nullexternref`,
          * `(ref func)` or `(ref extern)`; the last two need a `$value`.
@@ -383,7 +383,7 @@ namespace Wasm {
     /**
      * An exception tag, like JS `WebAssembly.Tag`.
      */
-    class Tag {
+    final class Tag {
         /**
          * @param array{parameters: list<string>} $descriptor
          *
@@ -406,7 +406,7 @@ namespace Wasm {
      * WASI preview1 through `getImportObject()`, a component gets preview2 when
      * the Wasi object is passed to `Wasm\Component\Instance`.
      */
-    class Wasi {
+    final class Wasi {
         /**
          * @param list<string>|null $args argv, including the program name
          * @param array<string, string>|null $env
@@ -488,7 +488,7 @@ namespace Wasm\Component {
      *
      * Compile once and instantiate as often as needed, like `Wasm\Module`.
      */
-    class Component {
+    final class Component {
         /**
          * Compiles a component binary or WAT text.
          *
@@ -523,7 +523,7 @@ namespace Wasm\Component {
      * component cannot be given one back. Each one received is a new object, so
      * neither `==` nor `===` tells whether two are the same error-context.
      */
-    class ErrorContext {
+    final class ErrorContext {
         public function __construct() {}
     }
 
@@ -533,7 +533,7 @@ namespace Wasm\Component {
      * Functions are camelCase methods; `get()` takes any export by its WIT name,
      * with or without version.
      */
-    class Exports implements \IteratorAggregate {
+    final class Exports implements \IteratorAggregate {
         /**
          * @param string $name
          * @param array $arguments
@@ -562,7 +562,7 @@ namespace Wasm\Component {
     /**
      * Iterates the exports of a component instance by WIT name.
      */
-    class ExportsIterator implements \Iterator {
+    final class ExportsIterator implements \Iterator {
         public function __construct() {}
 
         /**
@@ -594,7 +594,7 @@ namespace Wasm\Component {
     /**
      * An exported component function, callable from PHP.
      */
-    class Func {
+    final class Func {
         public function __construct() {}
 
         /**
@@ -615,7 +615,7 @@ namespace Wasm\Component {
      * A `future<T>` a component returned. `await()` runs the component until
      * its value is there and returns it, the same value on every call.
      */
-    class Future {
+    final class Future {
         public function __construct() {}
 
         /**
@@ -629,8 +629,8 @@ namespace Wasm\Component {
     /**
      * An instance of a component, with a store of its own.
      */
-    class Instance {
-        public readonly mixed $exports = null;
+    final class Instance {
+        public readonly mixed $exports;
 
         /**
          * @param array<string, callable|array<string, callable>>|null $imports
@@ -654,7 +654,7 @@ namespace Wasm\Component {
      * A handle to a resource owned by a component instance. Methods call the
      * component; `drop()` releases the handle, as does the destructor.
      */
-    class Resource {
+    final class Resource {
         /**
          * @param string $name
          * @param array $arguments
@@ -690,7 +690,7 @@ namespace Wasm\Component {
      * A resource type a component exports: `new(...)` constructs it, and its
      * static functions are camelCase methods.
      */
-    class ResourceClass {
+    final class ResourceClass {
         /**
          * @param string $name
          * @param array $arguments
@@ -718,7 +718,7 @@ namespace Wasm\Component {
      * A value of a WIT `result` inside another value: ok with a value, or err
      * with a payload.
      */
-    class Result {
+    final class Result {
         /**
          * Whether this is an ok result, as a property for var_dump() and assertEquals().
          *
@@ -731,7 +731,7 @@ namespace Wasm\Component {
          *
          * @var mixed
          */
-        public readonly mixed $payload = null;
+        public readonly mixed $payload;
 
         public function __construct() {}
 
@@ -777,7 +777,7 @@ namespace Wasm\Component {
      * a binary string for `stream<u8>`, a list of values otherwise, `null` at
      * the end. Iterating gives the chunks too.
      */
-    class Stream implements \Iterator {
+    final class Stream implements \Iterator {
         public function __construct() {}
 
         /**
@@ -818,10 +818,10 @@ namespace Wasm\Component {
     /**
      * A value of a WIT `variant`: the name of its case and the case's payload.
      */
-    class Variant {
+    final class Variant {
         public readonly string $tag;
 
-        public readonly mixed $value = null;
+        public readonly mixed $value;
 
         /**
          * @param string $tag
@@ -837,7 +837,7 @@ namespace Wasm\Component\Http {
      *
      * Header names are lowercase and every name maps to a list of values.
      */
-    class Request {
+    final class Request {
         public readonly string $body;
 
         /**
@@ -845,7 +845,7 @@ namespace Wasm\Component\Http {
          *
          * @var mixed
          */
-        public readonly mixed $headers = null;
+        public readonly mixed $headers;
 
         public readonly string $method;
 
@@ -864,7 +864,7 @@ namespace Wasm\Component\Http {
     /**
      * The HTTP response of a component.
      */
-    class Response {
+    final class Response {
         public readonly string $body;
 
         /**
@@ -872,7 +872,7 @@ namespace Wasm\Component\Http {
          *
          * @var mixed
          */
-        public readonly mixed $headers = null;
+        public readonly mixed $headers;
 
         public readonly int $status;
 
@@ -890,20 +890,20 @@ namespace Wasm\Component\Type {
     /**
      * A WIT function type: its parameters by name and its result.
      */
-    class FunctionType {
+    final class FunctionType {
         /**
          * @return array<string, \Wasm\Component\Type\ValueType>
          *
          * @var mixed
          */
-        public readonly mixed $params = null;
+        public readonly mixed $params;
 
         /**
          * @return \Wasm\Component\Type\ValueType|null
          *
          * @var mixed
          */
-        public readonly mixed $result = null;
+        public readonly mixed $result;
 
         public function __construct() {}
 
@@ -920,13 +920,13 @@ namespace Wasm\Component\Type {
      * for the kinds they belong to and null otherwise. Fixed-length lists only
      * report their kind: components using them do not compile yet.
      */
-    class ValueType {
+    final class ValueType {
         /**
          * @return array<string, \Wasm\Component\Type\ValueType|null>|null
          *
          * @var mixed
          */
-        public readonly mixed $cases = null;
+        public readonly mixed $cases;
 
         /**
          * The element of a list or stream, the value of an option or future, or
@@ -936,21 +936,21 @@ namespace Wasm\Component\Type {
          *
          * @var mixed
          */
-        public readonly mixed $element = null;
+        public readonly mixed $element;
 
         /**
          * @return \Wasm\Component\Type\ValueType|null
          *
          * @var mixed
          */
-        public readonly mixed $err = null;
+        public readonly mixed $err;
 
         /**
          * @return array<string, \Wasm\Component\Type\ValueType>|null
          *
          * @var mixed
          */
-        public readonly mixed $fields = null;
+        public readonly mixed $fields;
 
         /**
          * The key type of a map.
@@ -959,7 +959,7 @@ namespace Wasm\Component\Type {
          *
          * @var mixed
          */
-        public readonly mixed $key = null;
+        public readonly mixed $key;
 
         public readonly string $kind;
 
@@ -968,35 +968,35 @@ namespace Wasm\Component\Type {
          *
          * @var string|null
          */
-        public readonly ?string $name = null;
+        public readonly ?string $name;
 
         /**
          * @return list<string>|null
          *
          * @var mixed
          */
-        public readonly mixed $names = null;
+        public readonly mixed $names;
 
         /**
          * @return \Wasm\Component\Type\ValueType|null
          *
          * @var mixed
          */
-        public readonly mixed $ok = null;
+        public readonly mixed $ok;
 
         /**
          * The resource of an own or borrow handle.
          *
          * @var string|null
          */
-        public readonly ?string $resource = null;
+        public readonly ?string $resource;
 
         /**
          * @return list<\Wasm\Component\Type\ValueType>|null
          *
          * @var mixed
          */
-        public readonly mixed $types = null;
+        public readonly mixed $types;
 
         public function __construct() {}
     }
