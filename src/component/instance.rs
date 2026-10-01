@@ -36,8 +36,11 @@ impl Instance {
         wasi: Option<&Wasi>,
     ) -> PhpResult<Self> {
         let store = store::new();
-        if imports::has_suspending(component, imports) {
-            // Decided before linking: every PHP import of such an instance is async.
+        if imports::has_suspending(component, imports) || imports::uses_async_abi(component) {
+            // Decided before linking: every PHP import of such an instance is
+            // async. An async-ABI component runs every guest task on a fiber,
+            // where PHP code must not run, so its plain imports go through the
+            // poll loop on the PHP stack too.
             store.with(|mut ctx| ctx.data_mut().is_async = true);
         }
         let mut linker: Linker<HostState> = Linker::new(engine());

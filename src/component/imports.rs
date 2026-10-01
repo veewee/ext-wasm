@@ -597,6 +597,27 @@ impl std::future::Future for ComponentHostCall<'_> {
     }
 }
 
+/// Whether any function the component imports or exports, at the world
+/// level or inside an interface, is an `async func`.
+pub fn uses_async_abi(component: &Component) -> bool {
+    let ty = component.inner.component_type();
+    let mut items: Vec<ComponentItem> = ty
+        .imports(engine())
+        .chain(ty.exports(engine()))
+        .map(|(_, item)| item.ty)
+        .collect();
+    while let Some(item) = items.pop() {
+        match item {
+            ComponentItem::ComponentFunc(func) if func.async_() => return true,
+            ComponentItem::ComponentInstance(instance) => {
+                items.extend(instance.exports(engine()).map(|(_, item)| item.ty));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Whether any import is a `Wasm\Suspending`, at the world level or inside
 /// an imported interface. Checked before linking, since every PHP import of
 /// such an instance is async.
