@@ -36,6 +36,8 @@ pub struct HostState {
     pub is_async: bool,
     /// Whether a sync PHP host function exists, which rules out turning async.
     pub sync_callbacks: bool,
+    /// The memory of this store, counted against wasm.memory_limit.
+    pub memory: crate::limits::MemoryBudget,
 }
 
 // SAFETY: wasmtime-wasi and wasmtime's async functions require Send store
@@ -251,7 +253,9 @@ pub enum Active {
 }
 
 thread_local! {
-    static STANDALONE: RefCell<Weak<StoreHandle>> = const { RefCell::new(Weak::new()) };
+    /// With the wasm.memory_limit it was created with.
+    static STANDALONE: RefCell<(Weak<StoreHandle>, Option<u64>)> =
+        const { RefCell::new((Weak::new(), None)) };
 }
 
 /// The store that standalone objects share when they are created without one.
@@ -260,12 +264,18 @@ thread_local! {
 /// which is only possible when both live in the same store. Instances get a
 /// store of their own instead, so dropping one frees its memory.
 pub fn standalone() -> SharedStore {
+    let limit = crate::limits::memory_limit();
     STANDALONE.with(|standalone| {
-        if let Some(handle) = standalone.borrow().upgrade() {
+        // A changed limit starts a new store, so a limit set around one
+        // library call does not reach objects created before or after it.
+        if let (shared, created_with) = &*standalone.borrow()
+            && *created_with == limit
+            && let Some(handle) = shared.upgrade()
+        {
             return handle;
         }
         let handle = new();
-        *standalone.borrow_mut() = Rc::downgrade(&handle);
+        *standalone.borrow_mut() = (Rc::downgrade(&handle), limit);
         handle
     })
 }
@@ -278,22 +288,28 @@ pub fn standalone() -> SharedStore {
 pub fn retire_standalone(store: &SharedStore) {
     STANDALONE.with(|standalone| {
         let mut standalone = standalone.borrow_mut();
-        if std::ptr::eq(standalone.as_ptr(), Rc::as_ptr(store)) {
-            *standalone = Weak::new();
+        if std::ptr::eq(standalone.0.as_ptr(), Rc::as_ptr(store)) {
+            standalone.0 = Weak::new();
         }
     });
 }
 
-/// Creates a store of its own.
+/// Creates a store of its own, with the limits currently set.
 pub fn new() -> SharedStore {
+    let memory_limit = crate::limits::memory_limit();
     Rc::new_cyclic(|handle| StoreHandle {
-        store: RefCell::new(Store::new(
-            engine(),
-            HostState {
-                handle: handle.clone(),
-                ..HostState::default()
-            },
-        )),
+        store: RefCell::new({
+            let mut store = Store::new(
+                engine(),
+                HostState {
+                    handle: handle.clone(),
+                    memory: crate::limits::MemoryBudget::new(memory_limit),
+                    ..HostState::default()
+                },
+            );
+            store.limiter(|state| &mut state.memory);
+            store
+        }),
         active: Cell::new(Active::None),
         parked: Cell::new(false),
         requests: RefCell::new(std::collections::VecDeque::new()),

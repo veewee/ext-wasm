@@ -10,6 +10,7 @@ mod functions;
 mod global;
 mod imports;
 mod instance;
+mod limits;
 mod memory;
 mod module;
 mod store;
@@ -33,11 +34,18 @@ pub extern "C" fn php_module_info(_module: *mut ModuleEntry) {
     info_table_end!();
 }
 
-static INI_ENTRIES: IniEntryDefs<3> = IniEntryDefs::new([
+static INI_ENTRIES: IniEntryDefs<4> = IniEntryDefs::new([
     // System only: the engine is created once per process, so a later
     // ini_set() could not change anything.
     IniEntryDef::new(c"wasm.cache", c"1", IniEntryPermission::System),
     IniEntryDef::new(c"wasm.cache_dir", c"", IniEntryPermission::System),
+    // Taken by each store when it is created, so ini_set() applies to the
+    // stores created after it.
+    {
+        let mut entry = IniEntryDef::new(c"wasm.memory_limit", c"0", IniEntryPermission::All);
+        entry.on_modify = Some(limits::on_memory_limit);
+        entry
+    },
     IniEntryDef::end(),
 ]);
 

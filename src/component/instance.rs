@@ -58,6 +58,7 @@ impl Instance {
             wasi.attach(&store)?;
         }
         let exports = store.with(|mut ctx| {
+            ctx.data_mut().memory.reset();
             let instantiated = if ctx.data().is_async {
                 suspend::drive(&store, linker.instantiate_async(&mut ctx, &component.inner))
             } else {
@@ -66,7 +67,7 @@ impl Instance {
             let instance = match instantiated {
                 Ok(instance) => instance,
                 Err(err) if err.is::<wasmtime::Trap>() => return Err(call_error(&mut ctx, err)),
-                Err(err) => return Err(link_error(err)),
+                Err(err) => return Err(link_error(ctx.data_mut().memory.explain(err))),
             };
             let ty = component.inner.component_type();
             Exports::new(&store, &mut ctx, &instance, None, ty.exports(engine()))
