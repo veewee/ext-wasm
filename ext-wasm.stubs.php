@@ -74,6 +74,11 @@ namespace Wasm {
          * @return int
          */
         public function length(): int {}
+
+        /**
+         * @return array{parameters: list<string>, results: list<string>}
+         */
+        public function type(): array {}
     }
 
     /**
@@ -84,6 +89,9 @@ namespace Wasm {
      */
     class GlobalVar {
         /**
+         * `value` is a value type name as `type()` gives it; reference types other
+         * than func and extern ones cannot hold a PHP value.
+         *
          * @param array{value: string, mutable?: bool} $descriptor
          *
          * @param mixed $value
@@ -111,6 +119,11 @@ namespace Wasm {
         public function __set(string $name, mixed $value): void {}
 
         /**
+         * @return array{value: string, mutable: bool}
+         */
+        public function type(): array {}
+
+        /**
          * @return mixed
          */
         public function valueOf(): mixed {}
@@ -134,7 +147,7 @@ namespace Wasm {
      */
     class Memory {
         /**
-         * @param array{initial: int, maximum?: int} $descriptor
+         * @param array{initial?: int, minimum?: int, maximum?: int, address?: 'i32'|'i64'} $descriptor
          *
          * @param \Wasm\Store|null $store
          */
@@ -168,6 +181,13 @@ namespace Wasm {
         public function read(int $offset, int $length): string {}
 
         /**
+         * The memory's type, with its current size in pages as `minimum`.
+         *
+         * @return array{minimum: int, maximum?: int, address?: 'i64'}
+         */
+        public function type(): array {}
+
+        /**
          * @param int $offset
          * @param string $data
          * @return void
@@ -191,7 +211,12 @@ namespace Wasm {
         public function customSections(string $name): array {}
 
         /**
-         * @return list<array{name: string, kind: string}>
+         * Each entry's `type` is shaped like the JS type reflection proposal:
+         * `{parameters, results}` for a function, `{value, mutable}` for a global,
+         * `{minimum, maximum?}` for a memory, `{element, minimum, maximum?}` for a
+         * table and `{parameters}` for a tag.
+         *
+         * @return list<array{name: string, kind: string, type: array<string, mixed>}>
          */
         public function exports(): array {}
 
@@ -207,7 +232,9 @@ namespace Wasm {
         public static function fromFile(string $path): \Wasm\Module {}
 
         /**
-         * @return list<array{module: string, name: string, kind: string}>
+         * `type` is shaped as in exports().
+         *
+         * @return list<array{module: string, name: string, kind: string, type: array<string, mixed>}>
          */
         public function imports(): array {}
     }
@@ -303,7 +330,10 @@ namespace Wasm {
      */
     class Table {
         /**
-         * @param array{element: 'anyfunc'|'externref', initial: int, maximum?: int} $descriptor
+         * `element` is `funcref`, `externref`, `nullfuncref`, `nullexternref`,
+         * `(ref func)` or `(ref extern)`; the last two need a `$value`.
+         *
+         * @param array{element: string, initial?: int, minimum?: int, maximum?: int, address?: 'i32'|'i64'} $descriptor
          *
          * @param mixed $value
          * @param \Wasm\Store|null $store
@@ -336,6 +366,13 @@ namespace Wasm {
          * @return void
          */
         public function set(int $index, mixed $value = null): void {}
+
+        /**
+         * The table's type, with its current length as `minimum`.
+         *
+         * @return array{element: string, minimum: int, maximum?: int, address?: 'i64'}
+         */
+        public function type(): array {}
     }
 
     /**
@@ -348,6 +385,11 @@ namespace Wasm {
          * @param \Wasm\Store|null $store
          */
         public function __construct(array $descriptor, ?\Wasm\Store $store = null) {}
+
+        /**
+         * @return array{parameters: list<string>}
+         */
+        public function type(): array {}
     }
 
     /**

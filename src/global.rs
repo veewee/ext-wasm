@@ -1,3 +1,4 @@
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
@@ -7,8 +8,9 @@ use wasmtime::{GlobalType, HeapTopType, Mutability, StoreContextMut, Val, ValTyp
 use crate::error::{error, link_error, type_error};
 use crate::func::Func;
 use crate::store::{self, HostState, SharedStore, StoreObject};
+use crate::types::global_type;
 use crate::value::{
-    default_val, descriptor_bool, descriptor_str, downcast, from_val, parse_val_type, to_val,
+    descriptor_bool, descriptor_str, downcast, from_val, null_default, parse_val_type, to_val,
 };
 
 /// A wasm global, like JS `WebAssembly.Global`. Named GlobalVar because
@@ -25,6 +27,9 @@ pub struct GlobalVar {
 
 #[php_impl]
 impl GlobalVar {
+    /// `value` is a value type name as `type()` gives it; reference types other
+    /// than func and extern ones cannot hold a PHP value.
+    ///
     /// @param array{value: string, mutable?: bool} $descriptor
     pub fn __construct(
         descriptor: &ZendHashTable,
@@ -46,9 +51,9 @@ impl GlobalVar {
             .map(|func| (func.store.clone(), "Func"));
         let store = store::choose(store, from, store::standalone)?;
         let inner = store.with(|mut ctx| {
-            let initial = match value {
-                Some(value) if !value.is_null() => to_val(&mut ctx, value, &ty)?,
-                _ => default_val(&ty),
+            let initial = match value.filter(|value| !value.is_null()) {
+                Some(value) => to_val(&mut ctx, value, &ty)?,
+                None => null_default(&ty)?,
             };
             new_global(&mut ctx, ty, mutability, initial)
         })?;
@@ -76,6 +81,11 @@ impl GlobalVar {
 
     pub fn __isset(&self, name: String) -> bool {
         name == "value"
+    }
+
+    /// @return array{value: string, mutable: bool}
+    pub fn r#type(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        self.store.with(|ctx| global_type(&self.inner.ty(&ctx)))
     }
 
     pub fn value_of(&self) -> PhpResult<Zval> {

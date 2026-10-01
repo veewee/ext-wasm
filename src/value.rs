@@ -91,7 +91,13 @@ pub fn to_ref(
     value: &Zval,
     ty: &RefType,
 ) -> Result<Ref, ConvertError> {
-    if value.is_null() && ty.is_nullable() {
+    if value.is_null() {
+        if !ty.is_nullable() {
+            return Err(ConvertError::Type(format!(
+                "{} needs a value, it cannot be null",
+                crate::types::ref_type_name(ty)
+            )));
+        }
         return Ok(match ty.heap_type().top() {
             HeapTopType::Func => Ref::Func(None),
             HeapTopType::Extern => Ref::Extern(None),
@@ -99,6 +105,11 @@ pub fn to_ref(
         });
     }
     match ty.heap_type() {
+        HeapType::NoExtern | HeapType::NoFunc => Err(ConvertError::Type(format!(
+            "expected null for {}, got {}",
+            crate::types::ref_type_name(ty),
+            debug_type(value)
+        ))),
         HeapType::Extern => {
             // Allocating can run the GC, which cannot see a parked call's frames.
             if store::of(&*ctx).is_parked() {
@@ -226,17 +237,48 @@ pub fn debug_type(value: &Zval) -> String {
     }
 }
 
-/// Parses a JS-style value type name ("i32", "f64", ...).
+/// Parses a JS-style value type name ("i32", "f64", ...), or one of the
+/// reference type names `type()` gives that PHP values can be converted to.
 pub fn parse_val_type(name: &str) -> PhpResult<ValType> {
+    let reference = |nullable, heap| ValType::Ref(RefType::new(nullable, heap));
     Ok(match name {
         "i32" => ValType::I32,
         "i64" => ValType::I64,
         "f32" => ValType::F32,
         "f64" => ValType::F64,
         "v128" => ValType::V128,
-        "externref" => ValType::EXTERNREF,
-        "anyfunc" | "funcref" => ValType::FUNCREF,
-        other => return Err(type_error(format!("unknown wasm value type \"{other}\""))),
+        "externref" | "(ref null extern)" => ValType::EXTERNREF,
+        "anyfunc" | "funcref" | "(ref null func)" => ValType::FUNCREF,
+        "nullexternref" => ValType::NULLEXTERNREF,
+        "nullfuncref" => ValType::NULLFUNCREF,
+        "(ref extern)" => reference(false, HeapType::Extern),
+        "(ref func)" => reference(false, HeapType::Func),
+        other => {
+            return Err(type_error(format!(
+                "wasm value type \"{other}\" is unknown or cannot hold a PHP value"
+            )));
+        }
+    })
+}
+
+/// Whether a memory or table descriptor asks for a 64-bit address type.
+pub fn descriptor_address(descriptor: &ZendHashTable) -> PhpResult<bool> {
+    match descriptor_str(descriptor, "address")? {
+        None | Some("i32") => Ok(false),
+        Some("i64") => Ok(true),
+        Some(other) => Err(type_error(format!(
+            "descriptor \"address\" must be \"i32\" or \"i64\", got \"{other}\""
+        ))),
+    }
+}
+
+/// The value a global or table starts with when PHP gives none or null.
+pub fn null_default(ty: &ValType) -> PhpResult<Val> {
+    Val::default_for_ty(ty).ok_or_else(|| {
+        type_error(format!(
+            "{} needs a value, it cannot be null",
+            crate::types::val_type_name(ty)
+        ))
     })
 }
 
@@ -271,6 +313,21 @@ pub fn descriptor_int(descriptor: &ZendHashTable, key: &str) -> PhpResult<Option
                 debug_type(value)
             ))),
         },
+    }
+}
+
+/// The minimum size of a memory or table descriptor, given as `initial` like
+/// the JS constructors or as `minimum` like the types `type()` returns.
+pub fn descriptor_minimum(descriptor: &ZendHashTable) -> PhpResult<i64> {
+    match (
+        descriptor_int(descriptor, "initial")?,
+        descriptor_int(descriptor, "minimum")?,
+    ) {
+        (Some(_), Some(_)) => Err(type_error(
+            "descriptor takes \"initial\" and \"minimum\" as alternatives, not both",
+        )),
+        (Some(n), None) | (None, Some(n)) => Ok(n),
+        (None, None) => Err(type_error("descriptor \"initial\" is required")),
     }
 }
 

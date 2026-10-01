@@ -1,15 +1,17 @@
 use crate::limits::limited;
 use ext_php_rs::binary::Binary;
 use ext_php_rs::binary_slice::BinarySlice;
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::ZendHashTable;
 use wasmtime::MemoryType;
 
-use crate::error::{type_error, value_error};
+use crate::error::value_error;
 use crate::store::{self, SharedStore, StoreObject};
-use crate::value::descriptor_int;
+use crate::types::memory_type;
+use crate::value::{descriptor_address, descriptor_int, descriptor_minimum};
 
 /// Linear memory, like JS `WebAssembly.Memory`.
 ///
@@ -24,12 +26,18 @@ pub struct Memory {
 
 #[php_impl]
 impl Memory {
-    /// @param array{initial: int, maximum?: int} $descriptor
+    /// @param array{initial?: int, minimum?: int, maximum?: int, address?: 'i32'|'i64'} $descriptor
     pub fn __construct(descriptor: &ZendHashTable, store: Option<&StoreObject>) -> PhpResult<Self> {
-        let initial = descriptor_int(descriptor, "initial")?
-            .ok_or_else(|| type_error("descriptor \"initial\" is required"))?;
+        let initial = descriptor_minimum(descriptor)?;
         let maximum = descriptor_int(descriptor, "maximum")?;
-        let ty = MemoryType::new(page_count(initial)?, maximum.map(page_count).transpose()?);
+        // The builder reports what MemoryType::new would panic on, such as a
+        // minimum above the maximum.
+        let ty = MemoryType::builder()
+            .memory64(descriptor_address(descriptor)?)
+            .min(initial as u64)
+            .max(maximum.map(|n| n as u64))
+            .build()
+            .map_err(|err| value_error(format!("{err:#}")))?;
         let store = store::choose(store, [], store::standalone)?;
         let inner = store
             .with(|mut ctx| limited(&mut ctx, |ctx| wasmtime::Memory::new(ctx, ty)))
@@ -75,6 +83,14 @@ impl Memory {
             })
     }
 
+    /// The memory's type, with its current size in pages as `minimum`.
+    ///
+    /// @return array{minimum: int, maximum?: int, address?: 'i64'}
+    pub fn r#type(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        self.store
+            .with(|ctx| memory_type(&self.inner.ty(&ctx), self.inner.size(&ctx)))
+    }
+
     pub fn byte_length(&self) -> i64 {
         self.store.with(|ctx| self.inner.data_size(&ctx) as i64)
     }
@@ -83,10 +99,6 @@ impl Memory {
     pub fn buffer(&self) -> Binary<u8> {
         self.store.with(|ctx| self.inner.data(&ctx).to_vec()).into()
     }
-}
-
-fn page_count(pages: i64) -> PhpResult<u32> {
-    u32::try_from(pages).map_err(|_| value_error(format!("{pages} pages is out of range")))
 }
 
 fn to_usize(value: i64, name: &str) -> PhpResult<usize> {

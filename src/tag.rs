@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::convert::IntoZval;
 use ext_php_rs::exception::{PhpException, PhpResult};
 use ext_php_rs::flags::ClassFlags;
@@ -11,6 +12,7 @@ use wasmtime::{FuncType, StoreContextMut, TagType, ValType};
 use crate::engine::engine;
 use crate::error::{type_error, value_error};
 use crate::store::{self, HostState, KnownTag, SharedStore, StoreObject};
+use crate::types::tag_type;
 use crate::value::{debug_type, downcast, parse_val_type};
 
 /// An exception tag, like JS `WebAssembly.Tag`.
@@ -60,6 +62,11 @@ impl Tag {
             inner,
             alive: Rc::new(Cell::new(true)),
         })
+    }
+
+    /// @return array{parameters: list<string>}
+    pub fn r#type(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        self.store.with(|ctx| tag_type(&self.inner.ty(&ctx)))
     }
 }
 

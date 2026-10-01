@@ -20,6 +20,7 @@ mod suspend;
 mod table;
 mod tag;
 mod throw;
+mod types;
 mod value;
 mod wasi;
 
