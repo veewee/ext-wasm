@@ -59,7 +59,7 @@ impl Rule {
             Some(rest) => (rest, true),
             None => (entry, false),
         };
-        let (host, port) = split_port(rest).map_err(&invalid)?;
+        let (host, port) = split_port(rest).map_err(invalid)?;
         let port = match (port, any_port) {
             (Some(_), true) => return Err(invalid(SHAPE)),
             (Some(0), false) => return Err(invalid("has an invalid port")),

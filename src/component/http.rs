@@ -55,7 +55,7 @@ impl HostRule {
             Some(domain) => (domain, true),
             None => (entry, false),
         };
-        let (host, port) = split_port(rest).map_err(&invalid)?;
+        let (host, port) = split_port(rest).map_err(invalid)?;
         let host = normalize(host);
         if host.is_empty() || host.contains('*') {
             return Err(invalid(
