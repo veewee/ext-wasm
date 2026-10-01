@@ -107,11 +107,7 @@ impl Exports {
 
 fn wrap_extern(store: &SharedStore, ext: Extern) -> PhpResult<Zval> {
     match ext {
-        Extern::Func(inner) => Ok(Func {
-            store: store.clone(),
-            inner,
-        }
-        .into_zval(false)?),
+        Extern::Func(inner) => Ok(Func::wasm(store.clone(), inner).into_zval(false)?),
         Extern::Global(inner) => Ok(GlobalVar {
             store: store.clone(),
             inner,

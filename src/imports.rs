@@ -72,7 +72,7 @@ fn owner(value: &Zval) -> Option<(SharedStore, &'static str)> {
     if let Some(tag) = downcast::<Tag>(value) {
         return Some((tag.store.clone(), "Tag"));
     }
-    downcast::<Func>(value).map(|func| (func.store.clone(), "Func"))
+    downcast::<Func>(value).and_then(|func| func.store().map(|store| (store.clone(), "Func")))
 }
 
 fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpResult<Extern> {
@@ -90,7 +90,10 @@ fn to_extern(store: &SharedStore, import: &ImportType<'_>, value: &Zval) -> PhpR
         return Ok(tag.inner.into());
     }
     if let Some(func) = downcast::<Func>(value) {
-        return Ok(func.inner.into());
+        return store
+            .with(|mut ctx| func.in_store(&mut ctx))
+            .map(Into::into)
+            .map_err(link_error);
     }
     if let Some(suspending) = downcast::<Suspending>(value) {
         return match import.ty() {

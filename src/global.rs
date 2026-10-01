@@ -48,7 +48,7 @@ impl GlobalVar {
         let from = value
             .filter(|_| matches!(&ty, ValType::Ref(r) if r.heap_type().top() == HeapTopType::Func))
             .and_then(downcast::<Func>)
-            .map(|func| (func.store.clone(), "Func"));
+            .and_then(|func| func.store().map(|store| (store.clone(), "Func")));
         let store = store::choose(store, from, store::standalone)?;
         let inner = store.with(|mut ctx| {
             let initial = match value.filter(|value| !value.is_null()) {

@@ -63,7 +63,7 @@ impl Table {
         let from = value
             .filter(|_| element.heap_type().top() == HeapTopType::Func)
             .and_then(downcast::<Func>)
-            .map(|func| (func.store.clone(), "Func"));
+            .and_then(|func| func.store().map(|store| (store.clone(), "Func")));
         let store = store::choose(store, from, store::standalone)?;
         let inner = store.with(|mut ctx| {
             let init = to_ref(&mut ctx, value.unwrap_or(&null), &element)?;

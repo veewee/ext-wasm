@@ -126,22 +126,30 @@ pub fn to_ref(
             Ok(Ref::Extern(Some(externref)))
         }
         HeapType::Func => match downcast::<Func>(value) {
-            Some(func) if store::owns(&*ctx, &func.store) => Ok(Ref::Func(Some(func.inner))),
-            Some(_) => Err(ConvertError::Link(store::mismatch_message("Func"))),
+            Some(func) => func
+                .in_store(ctx)
+                .map(|func| Ref::Func(Some(func)))
+                .map_err(ConvertError::Link),
             None => Err(ConvertError::Type(format!(
                 "expected Wasm\\Func or null for {ty}, got {}",
                 debug_type(value)
             ))),
         },
         HeapType::ConcreteFunc(expected) => match downcast::<Func>(value) {
-            // The store check comes first: a func of another store makes
-            // wasmtime's type lookups panic.
-            Some(func) if store::owns(&*ctx, &func.store) => {
-                let actual = func.inner.ty(&*ctx);
+            Some(func) => {
+                // A PHP callable is checked before it gets a function in this
+                // store, which would mark the store as having sync callbacks.
+                // For an exported function, in_store checks the store first:
+                // a func of another store makes wasmtime's type lookups panic.
+                let actual = match func.host_type() {
+                    Some(host) => host.clone(),
+                    None => func.in_store(ctx).map_err(ConvertError::Link)?.ty(&*ctx),
+                };
                 // Matched by declared type, as the spec and JS do: wasmtime's
                 // own Func::matches_ty only compares parameters and results.
                 if HeapType::ConcreteFunc(actual.clone()).matches(ty.heap_type()) {
-                    Ok(Ref::Func(Some(func.inner)))
+                    let func = func.in_store(ctx).map_err(ConvertError::Link)?;
+                    Ok(Ref::Func(Some(func)))
                 } else {
                     let (wanted, given) = (
                         crate::types::signature(expected),
@@ -158,7 +166,6 @@ pub fn to_ref(
                     )))
                 }
             }
-            Some(_) => Err(ConvertError::Link(store::mismatch_message("Func"))),
             None => Err(ConvertError::Type(format!(
                 "expected a Wasm\\Func of type {}{}, got {}",
                 crate::types::signature(expected),
@@ -198,12 +205,9 @@ pub fn from_ref(
 ) -> Result<Zval, ConvertError> {
     match value {
         Ref::Func(None) | Ref::Extern(None) => Ok(Zval::null()),
-        Ref::Func(Some(inner)) => Func {
-            store: store::of(ctx),
-            inner: *inner,
-        }
-        .into_zval(false)
-        .map_err(|err| ConvertError::Value(err.to_string())),
+        Ref::Func(Some(inner)) => Func::wasm(store::of(ctx), *inner)
+            .into_zval(false)
+            .map_err(|err| ConvertError::Value(err.to_string())),
         Ref::Extern(Some(externref)) => {
             let key = externref
                 .data(&*ctx)

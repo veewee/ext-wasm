@@ -140,6 +140,18 @@ $global = new Wasm\GlobalVar(['value' => 'i64', 'mutable' => true], 42);
 $global->value = 43;
 ```
 
+A PHP callable becomes a wasm function of a given type with `new Wasm\Func`, like `WebAssembly.Function` in the JS type reflection proposal. It can then go into a table, a `funcref` global or argument, or an import, and be called from PHP like any `Func`:
+
+```php
+$add = new Wasm\Func(['parameters' => ['i32', 'i32'], 'results' => ['i32']], fn (int $a, int $b): int => $a + $b);
+$table->set(0, $add);          // an instance that imports $table can call_indirect it
+$add(2, 3);                    // 5
+```
+
+Such a `Func` belongs to no store and works with any instance, as in JS. Each store it is used in keeps the callable until the store is freed. It matches a function type of a module, `(ref $t)`, when `$t` is final, has no supertype and is alone in its rec group. It does not match an open `sub` type, a type declared with a supertype or a type in a larger rec group. `type()` of an exported function goes back in when its types are numeric or func and extern references, as for the other constructors below. The callable cannot be a `Wasm\Suspending` and cannot suspend a Fiber, and a store that has used it cannot take an instance with `Wasm\Suspending` imports any more.
+
+Called from PHP, such a `Func` runs in a store of its own, so a function reference it returns belongs to that store and cannot go into a table of another one. PHP's garbage collector does not see the callable it holds, so a callable that captures its own `Func`, for recursion, keeps both alive until that variable is set to `null`.
+
 `Global` is a reserved word in PHP, which is why the class is called `GlobalVar`. PHP has no shared `ArrayBuffer`, so memory is read and written through copies instead of a live view.
 
 `type()` on a `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` gives the same shape as `exports()`, with the current size of a memory or table as `minimum`. The constructors take `minimum` as well as `initial`, and `address`, so a type goes back in: `new Wasm\Memory($memory->type())`. That works for numeric types and for func and extern references; a `GlobalVar` or `Table` of `(ref func)` or `(ref extern)` needs a value to start with, and a 64-bit limit that came out as a float does not go back in. Other reference types, such as `anyref`, cannot hold a PHP value and are a `TypeError`.
@@ -149,8 +161,8 @@ $global->value = 43;
 wasmtime keeps wasm objects in stores and frees memory one whole store at a time. The extension picks a store for every object you create:
 
 - an instance joins the store of the `Memory`, `Table`, `GlobalVar`, `Tag` or `Func` objects it imports, and gets a store of its own when it imports none,
-- a `Table` or `GlobalVar` joins the store of the function it starts with, as `$table` does above,
-- any other `Memory`, `Table`, `GlobalVar` or `Tag` goes into a store that standalone objects share, so they can be imported together as in JS. Once an instance imports from that store, standalone objects created after it get a new shared store,
+- a `Table` or `GlobalVar` joins the store of the exported function it starts with, as `$table` does above. A `Func` made from a PHP callable has no store, so it does not choose one,
+- any other `Memory`, `Table`, `GlobalVar` or `Tag` goes into a store that standalone objects share, so they can be imported together as in JS. Once an instance imports from that store, or a `Func` made from a PHP callable is used in it, standalone objects created after it get a new shared store,
 - the exports of an instance live in the store of that instance.
 
 Dropping an instance together with its exports frees its memory, also in a long-running worker. Objects from two stores cannot be combined, so filling a standalone table with functions of an unrelated instance throws a `LinkError`. Group such objects in a `Wasm\Store`:
