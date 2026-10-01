@@ -353,10 +353,7 @@ fn import_object(store: &SharedStore) -> PhpResult<ZBox<ZendHashTable>> {
     });
     let mut namespace = ZendHashTable::new();
     for (name, inner) in functions {
-        let func = Func {
-            store: store.clone(),
-            inner,
-        };
+        let func = Func::wasm(store.clone(), inner);
         namespace.insert(name.as_str(), func.into_zval(false)?)?;
     }
     let mut object = ZendHashTable::new();

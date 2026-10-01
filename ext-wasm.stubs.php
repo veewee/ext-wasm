@@ -57,10 +57,15 @@ namespace Wasm {
     }
 
     /**
-     * An exported wasm function, callable from PHP.
+     * A wasm function: one a module exports, or a PHP callable of a given
+     * function type, like JS `new WebAssembly.Function(type, fn)`.
      */
     class Func {
-        public function __construct() {}
+        /**
+         * @param array{parameters: list<string>, results: list<string>} $type
+         * @param callable $callback
+         */
+        public function __construct(array $type, mixed $callback) {}
 
         /**
          * @param mixed $args
