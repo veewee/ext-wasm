@@ -20,13 +20,11 @@ The extension is experimental. The API can still change before a 1.0 release.
 
 ## Installation
 
-The package is meant to be installed with [PIE](https://github.com/php/pie):
+Install it with [PIE](https://github.com/php/pie):
 
 ```sh
 pie install veewee/ext-wasm
 ```
-
-It is not on Packagist yet and has no release, so until then build it from a checkout as shown below.
 
 The release workflow attaches prebuilt binaries for PHP 8.2 to 8.5 to each release, and PIE picks the one for your platform:
 
@@ -336,7 +334,7 @@ $exports->awaitValue('hi');                // a PHP value where the component ta
 
 Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable. wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
 
-Components cannot be combined with core objects: a component instance has a store of its own. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`.
+Components cannot be combined with core objects: a component instance has a store of its own. A component that uses fixed-length lists fails to compile with a `CompileError`.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
 
