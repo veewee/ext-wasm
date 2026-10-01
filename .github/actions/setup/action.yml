@@ -32,7 +32,9 @@ runs:
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       with:
-        key: php${{ inputs.php }}-${{ inputs.ts }}
+        # ImageOS (ubuntu22, ubuntu24, ...) keeps builds on different runner
+        # images apart; restoring one image's target dir on another fails.
+        key: php${{ inputs.php }}-${{ inputs.ts }}-${{ env.ImageOS }}
 
     # Runner images can carry several LLVM versions. bindgen takes the header
     # paths from the default clang, so its libclang has to be the same
