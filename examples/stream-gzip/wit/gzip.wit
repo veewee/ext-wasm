@@ -1,0 +1,11 @@
+package docs:stream-gzip@0.1.0;
+
+interface gzip {
+    /// Compresses the bytes read from `input` with gzip, as a stream that
+    /// starts before the input ended.
+    compress: async func(input: stream<u8>, level: u32) -> stream<u8>;
+}
+
+world compressor {
+    export gzip;
+}
