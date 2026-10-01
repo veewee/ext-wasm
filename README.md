@@ -257,6 +257,14 @@ $wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.exampl
 
 An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Connecting, waiting for the response headers and every wait between body chunks are each limited to PHP's `default_socket_timeout`, read when the component is instantiated, and the whole setup until the headers, TLS handshake included, to twice that. With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies and the TLS handshake has none. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
 
+A component can open TCP connections through `wasi:sockets`, for example a database or cache client using Rust's `std::net::TcpStream`, when the `Wasi` object lists the destinations it may reach:
+
+```php
+$wasi = new Wasm\Wasi(tcpHosts: ['db.internal:5432', '10.0.0.0/8:6379', '[fd00::/8]:*']);
+```
+
+An entry is a host, an IP address or a network in CIDR notation, followed by a port or `*` for any port; IPv6 goes in brackets. wasmtime checks every connect by address and port only, because the component resolves names itself, so a host entry is checked by resolving it on the host at the moment the component connects. It allows whatever addresses the name resolves to, also when the component connects to one of them by address. A connect to anything else fails inside the component with a permission error, before a packet is sent. Without `tcpHosts`, or with an empty list, every connect is refused. Name lookups are only turned on when the list holds a host entry: a component that connects by name to an IP-only list gets a lookup error. While lookups are on, the component can look up any name, which sends those names to the host's resolver. Listening and UDP stay refused; a bind to the wildcard address with port 0 is allowed, because every connect makes that bind first, but listening on it is not. A wide network such as `0.0.0.0/0` includes loopback and link-local addresses, a host entry whose name resolves to a private address allows that address, and an IPv6 rule ignores the interface a link-local address is reached through. The extension's own lookup for a name rule waits at most PHP's `default_socket_timeout` and counts as a refusal after that. There is no timeout from the extension for the connect itself, and `max_execution_time` does not interrupt a connect that hangs (75 seconds on macOS for an address that never answers). As with wasm code that loops, PHP's hard timeout ends the whole process `hard_timeout` seconds after the limit, without running shutdown functions. So connect with a timeout in the component, such as Rust's `TcpStream::connect_timeout`. On `wasm32-wasip2` that call returns `Ok` for a refused connection too, so check `take_error()` on the stream afterwards, as [examples/service-probe](examples/service-probe) does. `tcpHosts` has no effect for core modules, which have no outgoing sockets in WASI preview1.
+
 A component that exports `wasi:http/incoming-handler`, such as one built for `wasi:http/proxy`, can answer HTTP requests from PHP:
 
 ```php
@@ -374,7 +382,7 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and eleven larger ones:
+The [examples](examples) folder has small scripts for each feature, and twelve larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
@@ -384,6 +392,7 @@ The [examples](examples) folder has small scripts for each feature, and eleven l
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
 - [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
 - [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
+- [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
 - [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
 - [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
 - [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.

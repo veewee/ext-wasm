@@ -29,7 +29,30 @@ fn main() {
             print!("{}", "x".repeat(bytes));
         }
         Some("exit") => std::process::exit(args[2].parse().unwrap()),
+        Some("tcp") => print!("{}", exchange(&args[2], &args[3])),
+        Some("listen") => match std::net::TcpListener::bind(args[2].as_str()) {
+            Ok(_) => print!("listening"),
+            Err(err) => print!("error: {:?}: {err}", err.kind()),
+        },
         _ => {}
+    }
+}
+
+/// Connects to `address`, sends `message` and returns the reply, or the error
+/// with its kind, so tests can tell a refused permission from a failed lookup.
+fn exchange(address: &str, message: &str) -> String {
+    use std::net::TcpStream;
+    let result = (|| {
+        let mut stream = TcpStream::connect(address)?;
+        stream.write_all(message.as_bytes())?;
+        stream.shutdown(std::net::Shutdown::Write)?;
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply)?;
+        Ok::<_, std::io::Error>(reply)
+    })();
+    match result {
+        Ok(reply) => format!("reply: {reply}"),
+        Err(err) => format!("error: {:?}: {err}", err.kind()),
     }
 }
 
