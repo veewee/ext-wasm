@@ -641,6 +641,49 @@ namespace Wasm\Component {
     }
 
     /**
+     * A `stream<T>` a component returned. `read()` gives the next chunk:
+     * a binary string for `stream<u8>`, a list of values otherwise, `null` at
+     * the end. Iterating gives the chunks too.
+     */
+    class Stream implements \Iterator {
+        public function __construct() {}
+
+        /**
+         * @return string|list<mixed>|null
+         */
+        public function current(): mixed {}
+
+        /**
+         * @return int
+         */
+        public function key(): int {}
+
+        /**
+         * @return void
+         */
+        public function next(): void {}
+
+        /**
+         * The next chunk, or `null` once the stream ended.
+         *
+         * @return string|list<mixed>|null
+         */
+        public function read(): mixed {}
+
+        /**
+         * Starts reading; a stream cannot be read twice, so later calls do nothing.
+         *
+         * @return void
+         */
+        public function rewind(): void {}
+
+        /**
+         * @return bool
+         */
+        public function valid(): bool {}
+    }
+
+    /**
      * A value of a WIT `variant`: the name of its case and the case's payload.
      */
     class Variant {
