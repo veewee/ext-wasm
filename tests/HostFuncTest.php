@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Test;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Wasm\Exception\LinkError;
+use Wasm\Exception\RuntimeError;
 use Wasm\Exports;
 use Wasm\Func;
 use Wasm\Instance;
@@ -95,15 +98,70 @@ final class HostFuncTest extends TestCase
         self::assertSame(11, $exports->apply(self::add()));
     }
 
-    public function test_it_does_not_match_an_open_subtype_of_the_module(): void
+    /** @return iterable<string, array{string}> */
+    public static function unmatchedTypes(): iterable
     {
-        $exports = self::exports('
-            (type $add (sub (func (param i32 i32) (result i32))))
-            (func (export "apply") (param (ref $add)) (result i32)
-              (call_ref $add (i32.const 5) (i32.const 6) (local.get 0)))');
+        yield 'an open subtype' => ['(type $add (sub (func (param i32 i32) (result i32))))'];
+        yield 'a type with a supertype' => ['(type $base (sub (func (param i32 i32) (result i32))))
+            (type $add (sub final $base (func (param i32 i32) (result i32))))'];
+        yield 'a type in a larger rec group' => ['(rec (type $add (func (param i32 i32) (result i32))) (type $other (func)))'];
+    }
 
-        $this->expectException(\TypeError::class);
-        $exports->apply(self::add());
+    #[DataProvider('unmatchedTypes')]
+    public function test_a_type_it_does_not_match_leaves_the_store_unchanged(string $types): void
+    {
+        $store = new Store();
+        $exports = (new Instance(new Module("(module $types
+            (func (export \"apply\") (param (ref \$add)) (result i32)
+              (call_ref \$add (i32.const 5) (i32.const 6) (local.get 0))))"), store: $store))->exports;
+
+        try {
+            $exports->apply(self::add());
+            self::fail('expected a TypeError');
+        } catch (\TypeError $e) {
+            self::assertStringContainsString('(i32, i32) -> (i32)', $e->getMessage());
+        }
+
+        // A store with sync callbacks could not take Suspending imports any more.
+        $suspending = new Instance(new Module('(module (import "env" "wait" (func)))'), ['env' => ['wait' => new Suspending(fn () => null)]], $store);
+        self::assertInstanceOf(Instance::class, $suspending);
+    }
+
+    public function test_a_store_that_used_it_cannot_take_suspending_imports(): void
+    {
+        $store = new Store();
+        new Table(['element' => 'anyfunc', 'initial' => 1], self::add(), $store);
+
+        $this->expectException(LinkError::class);
+        $this->expectExceptionMessage('Suspending imports need a store without synchronous callbacks');
+        new Instance(new Module('(module (import "env" "wait" (func)))'), ['env' => ['wait' => new Suspending(fn () => null)]], $store);
+    }
+
+    public function test_it_is_used_in_two_live_stores_at_once(): void
+    {
+        $add = self::add();
+        $body = '(import "env" "add" (func $add (param i32 i32) (result i32)))
+            (func (export "run") (param i32) (result i32) (call $add (local.get 0) (i32.const 1)))';
+        $first = self::exports($body, ['env' => ['add' => $add]]);
+        $second = self::exports($body, ['env' => ['add' => $add]]);
+
+        self::assertSame([2, 3, 4, 5], [$first->run(1), $second->run(2), $first->run(3), $second->run(4)]);
+    }
+
+    public function test_a_standalone_table_started_with_it_keeps_the_objects_before_it(): void
+    {
+        $memory = new \Wasm\Memory(['initial' => 1]);
+        $table = new Table(['element' => 'anyfunc', 'initial' => 1], self::add());
+        $exports = self::exports('
+            (type $add (func (param i32 i32) (result i32)))
+            (import "env" "memory" (memory 1))
+            (import "env" "table" (table 1 funcref))
+            (func (export "run") (result i32) (call_indirect (type $add) (i32.const 1) (i32.const 2) (i32.const 0)))', ['env' => ['memory' => $memory, 'table' => $table]]);
+
+        self::assertSame(3, $exports->run());
+        $later = new \Wasm\Memory(['initial' => 1]);
+        $this->expectException(LinkError::class);
+        new Instance(new Module('(module (import "env" "memory" (memory 1)) (import "env" "table" (table 1 funcref)))'), ['env' => ['memory' => $later, 'table' => $table]]);
     }
 
     public function test_one_func_works_in_several_instances(): void
@@ -179,7 +237,7 @@ final class HostFuncTest extends TestCase
     {
         $f = new Func(['parameters' => [], 'results' => ['i32']], fn () => 'not an int');
 
-        $this->expectException(\Wasm\Exception\RuntimeError::class);
+        $this->expectException(RuntimeError::class);
         $this->expectExceptionMessage('expected int for i32, got string');
         $f();
     }
@@ -219,7 +277,7 @@ final class HostFuncTest extends TestCase
         yield 'a type PHP cannot hold' => [['parameters' => ['anyref'], 'results' => []], 'anyref'];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('badTypes')]
+    #[DataProvider('badTypes')]
     public function test_a_bad_type_is_a_type_error(array $type, string $message): void
     {
         $this->expectException(\TypeError::class);

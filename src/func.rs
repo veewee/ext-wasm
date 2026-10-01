@@ -88,6 +88,14 @@ impl Func {
         }
     }
 
+    /// The type of a PHP callable, known without a store.
+    pub fn host_type(&self) -> Option<&FuncType> {
+        match &self.origin {
+            Origin::Wasm { .. } => None,
+            Origin::Host(host) => Some(&host.ty),
+        }
+    }
+
     fn ty(&self) -> FuncType {
         match &self.origin {
             Origin::Wasm { store, inner } => store.with(|ctx| inner.ty(&ctx)),

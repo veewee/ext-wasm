@@ -136,14 +136,19 @@ pub fn to_ref(
             ))),
         },
         HeapType::ConcreteFunc(expected) => match downcast::<Func>(value) {
-            // The store check comes first: a func of another store makes
-            // wasmtime's type lookups panic.
             Some(func) => {
-                let func = func.in_store(ctx).map_err(ConvertError::Link)?;
-                let actual = func.ty(&*ctx);
+                // A PHP callable is checked before it gets a function in this
+                // store, which would mark the store as having sync callbacks.
+                // For an exported function, in_store checks the store first:
+                // a func of another store makes wasmtime's type lookups panic.
+                let actual = match func.host_type() {
+                    Some(host) => host.clone(),
+                    None => func.in_store(ctx).map_err(ConvertError::Link)?.ty(&*ctx),
+                };
                 // Matched by declared type, as the spec and JS do: wasmtime's
                 // own Func::matches_ty only compares parameters and results.
                 if HeapType::ConcreteFunc(actual.clone()).matches(ty.heap_type()) {
+                    let func = func.in_store(ctx).map_err(ConvertError::Link)?;
                     Ok(Ref::Func(Some(func)))
                 } else {
                     let (wanted, given) = (
