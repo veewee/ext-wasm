@@ -1,0 +1,12 @@
+package example:kv-server@0.1.0;
+
+interface connection {
+    /// Serves one client connection: reads Redis commands (RESP2) from
+    /// `input` and writes the replies to the returned stream, which ends
+    /// when the client sent QUIT or closed its side.
+    serve: async func(input: stream<u8>) -> stream<u8>;
+}
+
+world server {
+    export connection;
+}

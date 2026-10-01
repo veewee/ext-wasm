@@ -131,6 +131,17 @@ jobs:
           cat probe.txt
           grep -q '127.0.0.1:18080 *HTTP' probe.txt
           grep -q '127.0.0.1:16379 *Redis' probe.txt
+      - name: Build and run the key-value server example
+        run: |
+          examples/kv-server/build.sh
+          trap 'kill $(jobs -p)' EXIT
+          php -d "extension=$PWD/target/release/libwasm.so" examples/kv-server/server.php 16380 > /dev/null 2>&1 &
+          for _ in $(seq 20); do
+            php -r 'exit(@fsockopen("127.0.0.1", 16380) ? 0 : 1);' && break
+            sleep 0.5
+          done
+          timeout 30 php examples/kv-server/check.php 16380 2>&1 | tee check.txt
+          grep -q 'checks passed$' check.txt
       - name: Run concurrent lookups through Amp
         run: |
           composer install -d examples/async --no-interaction --no-progress
