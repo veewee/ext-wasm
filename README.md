@@ -369,6 +369,36 @@ Both can only be set in php.ini or with `-d`, because the engine is created once
 
 The cache holds machine code that runs inside the PHP process, so anyone who can write to that directory can run code as the PHP user. On a server, point `wasm.cache_dir` at a directory only the PHP user can write to.
 
+## Precompiled artifacts
+
+The cache is cold on a fresh container, for example after deploying a new image, and the first request then pays the full compile. `Wasm\Serializer` turns a compiled module or component into an artifact you build once, for example while building the image, and load in production without compiling:
+
+```php
+// At build time
+$serializer = new Wasm\Serializer();
+$artifact = $serializer->serializeModule(Wasm\Module::fromFile('mago.wasm'));
+file_put_contents('mago.cwasm.tmp', $artifact);
+rename('mago.cwasm.tmp', 'mago.cwasm');   // never leave a half-written artifact in place
+
+// In production
+$module = (new Wasm\Serializer())->deserializeModuleFile('mago.cwasm');
+```
+
+`serializeComponent()`, `deserializeComponent()` and `deserializeComponentFile()` do the same for components, and `deserializeModule()` takes the artifact as a string. On mago's 18 MB module, in a release build on an Apple M3 Pro, loading the artifact took about 40 ms, against 100 ms for a warm cache hit and three seconds for a compile. A module does not outlive the request, so every request that uses it pays that load again, along with memory of about the artifact's size (30 MB for mago).
+
+An artifact loads only where it was built for: the same OS, CPU architecture and wasmtime major version, a CPU with at least the features of the one that built it, and ext-wasm engine settings that wasmtime accepts as compatible with the ones it was built with. An artifact from a CI runner with newer CPU features than production, from macOS on a Linux container, or from before an ext-wasm upgrade that changed the engine settings in an incompatible way throws a `CompileError` that says why. Build artifacts on the host or CPU class you deploy to, and fall back to compiling when one does not fit or is missing:
+
+```php
+$serializer = new Wasm\Serializer();
+try {
+    $module = $serializer->deserializeModuleFile('mago.cwasm');
+} catch (Wasm\Exception\WasmException) {   // CompileError for an artifact that does not fit
+    $module = Wasm\Module::fromFile('mago.wasm');
+}
+```
+
+An artifact is machine code that runs inside the PHP process. Only load artifacts you built yourself, from a place only you can write to. The checksum inside an artifact catches a corrupted file, not a tampered one. `serialize()` of a `Module` or `Component` stays unsupported on purpose, so that `unserialize()` on user input can never load machine code.
+
 ## Limits worth knowing
 
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.

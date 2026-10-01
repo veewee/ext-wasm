@@ -2482,6 +2482,7 @@ name = "wasm"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "crc32fast",
  "ext-php-rs",
  "http",
  "http-body-util",
