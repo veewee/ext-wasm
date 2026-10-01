@@ -522,6 +522,12 @@ payloads! {
     String(String) = Type::String,
 }
 
+/// Whether a stream or future of `element` can cross to PHP: scalar
+/// payloads only, since wasmtime's typed stream API needs the Rust type.
+pub fn supports(element: Option<&Type>) -> bool {
+    element.is_some_and(Pipe::supports)
+}
+
 /// What a feeding producer and the PHP side advancing its iterator share.
 struct FeedInner<T> {
     items: Vec<T>,

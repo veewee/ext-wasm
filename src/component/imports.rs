@@ -430,11 +430,13 @@ fn define(
 fn unsupported_part(ty: &Type) -> Option<String> {
     let nested = |types: Vec<Type>| types.iter().find_map(unsupported_part);
     match ty {
-        Type::Map(_)
-        | Type::FixedLengthList(_)
-        | Type::Future(_)
-        | Type::Stream(_)
-        | Type::ErrorContext => Some(wit_type(ty)),
+        Type::Map(_) | Type::FixedLengthList(_) | Type::ErrorContext => Some(wit_type(ty)),
+        Type::Stream(stream) if !crate::component::stream::supports(stream.ty().as_ref()) => {
+            Some(wit_type(ty))
+        }
+        Type::Future(future) if !crate::component::stream::supports(future.ty().as_ref()) => {
+            Some(wit_type(ty))
+        }
         Type::List(list) => unsupported_part(&list.ty()),
         Type::Option(option) => unsupported_part(&option.ty()),
         Type::Tuple(tuple) => nested(tuple.types().collect()),

@@ -293,6 +293,94 @@ final class ComponentAsyncTest extends TestCase
         self::demo(fn (int $n): int => $n)->awaitValue(42);
     }
 
+    public function test_reflection_describes_streams_and_futures(): void
+    {
+        $exports = array_column(
+            Component::fromFile(__DIR__ . '/fixtures/component-async/component-async.wasm')->exports(),
+            'signature',
+            'name',
+        );
+
+        self::assertSame('stream', $exports['count-up']->result->kind);
+        self::assertSame('u32', $exports['count-up']->result->element->kind);
+        self::assertSame('future', $exports['greet-later']->result->kind);
+        self::assertSame('string', $exports['greet-later']->result->element->kind);
+    }
+
+    public function test_a_stream_cannot_be_read_inside_an_async_import(): void
+    {
+        $stream = null;
+        $error = null;
+        $exports = self::demo(function (int $n) use (&$stream, &$error): int {
+            try {
+                $stream->read();
+            } catch (RuntimeError $e) {
+                $error = $e->getMessage();
+            }
+
+            return $n;
+        });
+        $stream = $exports->countUp(3);
+
+        self::assertSame(2, $exports->run(1));
+        self::assertSame('the store is busy with a suspended call', $error);
+        self::assertSame([0, 1, 2], array_merge(...iterator_to_array($stream, false)));
+    }
+
+    public function test_a_stream_cannot_be_read_while_a_call_is_parked(): void
+    {
+        $exports = self::demo(new Suspending(fn (int $n): int => \Fiber::suspend() + $n));
+        $stream = $exports->countUp(3);
+        $fiber = new \Fiber(fn (): int => $exports->run(1));
+        $fiber->start();
+
+        try {
+            $stream->read();
+            self::fail('read while parked');
+        } catch (RuntimeError $e) {
+            self::assertSame('the store is busy with a suspended call', $e->getMessage());
+        }
+        $fiber->resume(1);
+        self::assertSame(3, $fiber->getReturn());
+    }
+
+    public function test_an_unsupported_stream_payload_fails_when_the_export_is_called(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        try {
+            $exports->points();
+            self::fail('a stream of records was returned');
+        } catch (RuntimeError $e) {
+            self::assertStringContainsString('streams of record', $e->getMessage());
+        }
+        self::assertSame(3, $exports->run(2));
+    }
+
+    public function test_an_import_taking_an_unsupported_stream_is_a_link_error(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (type $point' (record (field "x" u32)))
+              (import "point" (type $point (eq $point')))
+              (import "take" (func (param "s" (stream $point)))))
+            WAT);
+
+        $this->expectException(\Wasm\Exception\LinkError::class);
+        $this->expectExceptionMessage('stream<record');
+        new Instance($component, ['take' => fn ($s) => null]);
+    }
+
+    public function test_an_import_may_take_a_stream_of_bytes(): void
+    {
+        $component = new Component(<<<'WAT'
+            (component
+              (import "take" (func (param "s" (stream u8)))))
+            WAT);
+
+        self::assertInstanceOf(Instance::class, new Instance($component, ['take' => fn (Stream $s) => null]));
+    }
+
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void
     {
         $exports = (new Instance(new Component(self::ASYNC_EXPORT), ['plain' => fn (): int => 41]))->exports;

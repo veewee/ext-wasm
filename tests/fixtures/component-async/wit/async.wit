@@ -1,6 +1,11 @@
 package docs:async-demo@0.1.0;
 
 world async-demo {
+    record point {
+        x: u32,
+        y: u32,
+    }
+
     /// Implemented by PHP.
     import slow: async func(n: u32) -> u32;
 
@@ -18,6 +23,8 @@ world async-demo {
     export endless: async func() -> stream<u8>;
     /// A stream whose writer never writes and never closes.
     export stuck: async func() -> stream<u8>;
+    /// Records in a stream, which the extension cannot carry yet.
+    export points: async func() -> stream<point>;
     /// The sum of the numbers read.
     export sum: async func(s: stream<u32>) -> u64;
     /// The number of bytes read.

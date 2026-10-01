@@ -72,6 +72,14 @@ impl Guest for Component {
         rx
     }
 
+    async fn points() -> wit_bindgen::StreamReader<Point> {
+        let (mut tx, rx) = wit_stream::new::<Point>();
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write_all(vec![Point { x: 1, y: 2 }]).await;
+        });
+        rx
+    }
+
     async fn sum(mut s: wit_bindgen::StreamReader<u32>) -> u64 {
         let mut total = 0u64;
         while let Some(n) = s.next().await {

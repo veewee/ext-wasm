@@ -813,7 +813,7 @@ namespace Wasm\Component\Type {
         public readonly mixed $cases = null;
 
         /**
-         * The element of a list, or the value of an option.
+         * The element of a list or stream, or the value of an option or future.
          *
          * @return \Wasm\Component\Type\ValueType|null
          *
