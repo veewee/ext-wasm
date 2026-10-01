@@ -205,6 +205,65 @@ final class ComponentAsyncTest extends TestCase
         $stream->read();
     }
 
+    public function test_an_array_is_a_stream_for_the_component(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        self::assertSame(6, $exports->sum([1, 2, 3]));
+        self::assertSame(5, $exports->length(['ab', 'cde']));
+        self::assertSame(0, $exports->sum([]));
+    }
+
+    public function test_a_generator_is_read_lazily_by_the_component(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $produced = 0;
+        $numbers = (function () use (&$produced) {
+            for ($i = 1; $i <= 100; ++$i) {
+                ++$produced;
+                yield $i;
+            }
+        })();
+
+        self::assertSame(5050, $exports->sum($numbers));
+        self::assertSame(100, $produced);
+        self::assertSame(1 << 16, $exports->length((function () {
+            for ($i = 0; $i < 16; ++$i) {
+                yield str_repeat('z', 4096);
+            }
+        })()));
+    }
+
+    public function test_an_iterator_aggregate_is_a_stream_too(): void
+    {
+        $words = new \ArrayObject([1, 2, 3, 4]);
+
+        self::assertSame(10, self::demo(fn (int $n): int => $n)->sum($words));
+    }
+
+    public function test_an_exception_from_a_generator_reaches_the_caller(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('no more numbers');
+        $exports->sum((function () {
+            yield 1;
+            throw new \LogicException('no more numbers');
+        })());
+    }
+
+    public function test_a_value_of_the_wrong_type_in_a_stream_throws(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        $this->expectException(\TypeError::class);
+        $exports->sum((function () {
+            yield 1;
+            yield 'two';
+        })());
+    }
+
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void
     {
         $exports = (new Instance(new Component(self::ASYNC_EXPORT), ['plain' => fn (): int => 41]))->exports;

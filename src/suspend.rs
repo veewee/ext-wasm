@@ -60,6 +60,9 @@ pub enum Callee {
     Callable(Zval),
     /// A component import: a callable or a method of a resource's PHP class.
     Component(Target, Zval),
+    /// Advances a PHP iterator that feeds a component stream; it leaves its
+    /// items with the stream's producer and answers nothing.
+    Feed(Box<dyn FnOnce()>),
 }
 
 /// What the callback returned, or the message of its failure. An exception
@@ -265,6 +268,12 @@ fn call_parked(store: &StoreHandle, request: Request) {
     } = request;
     let _parked = store.park(access);
     let block = || (!suspending).then(FiberSwitchBlock::new);
+    if let Callee::Feed(advance) = callee {
+        let _no_fiber_switch = block();
+        drop(store.take_garbage());
+        advance();
+        return;
+    }
     {
         // What the previous callback returned. Releasing it can run PHP
         // destructors, which may use wasm objects again.
@@ -280,6 +289,7 @@ fn call_parked(store: &StoreHandle, request: Request) {
                 ZendCallable::new(callable).and_then(|callable| callable.try_call(args))
             }
             Callee::Component(target, callable) => call_target(target, callable, &args),
+            Callee::Feed(_) => unreachable!("handled above"),
         }
     };
     {

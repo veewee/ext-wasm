@@ -17,18 +17,34 @@ use ext_php_rs::types::{ZendHashTable, Zval};
 use ext_php_rs::zend::ce;
 use wasmtime::StoreContextMut;
 use wasmtime::component::types::Type;
-use wasmtime::component::{Source, StreamAny, StreamConsumer, StreamResult};
+use wasmtime::component::{
+    Destination, Source, StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult,
+    Val, VecBuffer,
+};
 
+use crate::component::value::scalar;
 use crate::error::runtime_error;
-use crate::store::{self, HostState, SharedStore};
-use crate::value::ConvertError;
+use crate::store::{self, Active, HostState, SharedStore, ValueKey};
+use crate::suspend::{Callee, Request};
+use crate::value::{ConvertError, debug_type};
 
 /// The most items one read takes from the component.
 const CHUNK: usize = 64 * 1024;
 
-/// Converts the items of one chunk to PHP.
-trait Item: Sized + Send + 'static {
+/// Converts the items of one chunk to PHP, and PHP values to items.
+trait Item: Sized + Send + Sync + 'static {
     fn to_zval(self) -> Zval;
+
+    fn from_val(val: Val) -> Option<Self>;
+
+    /// Adds what one element a PHP iterable yields stands for.
+    fn extend(value: &Zval, element: &Type, items: &mut Vec<Self>) -> Result<(), ConvertError> {
+        let val = scalar(value, element)?;
+        items.push(
+            Self::from_val(val).ok_or_else(|| ConvertError::Runtime("unexpected value".into()))?,
+        );
+        Ok(())
+    }
 
     fn chunk(items: Vec<Self>) -> Zval {
         let mut list = ZendHashTable::new();
@@ -42,33 +58,57 @@ trait Item: Sized + Send + 'static {
 }
 
 macro_rules! long_items {
-    ($($ty:ty),*) => {$(
+    ($($ty:ty = $val:ident),*) => {$(
         impl Item for $ty {
             fn to_zval(self) -> Zval {
                 let mut zval = Zval::new();
                 zval.set_long(self as i64);
                 zval
             }
+
+            fn from_val(val: Val) -> Option<Self> {
+                match val {
+                    Val::$val(n) => Some(n),
+                    _ => None,
+                }
+            }
         }
     )*};
 }
 
-long_items!(i8, i16, u16, i32, u32, i64);
-
-impl Item for u64 {
-    /// Keeps its bits above `PHP_INT_MAX`, as `u64` values do elsewhere.
-    fn to_zval(self) -> Zval {
-        let mut zval = Zval::new();
-        zval.set_long(self as i64);
-        zval
-    }
-}
+// u64 keeps its bits above PHP_INT_MAX, as u64 values do elsewhere.
+long_items!(
+    i8 = S8,
+    i16 = S16,
+    u16 = U16,
+    i32 = S32,
+    u32 = U32,
+    i64 = S64,
+    u64 = U64
+);
 
 impl Item for u8 {
     fn to_zval(self) -> Zval {
         let mut zval = Zval::new();
         zval.set_long(i64::from(self));
         zval
+    }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::U8(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// A string adds its bytes, so a `stream<u8>` can be fed string chunks.
+    fn extend(value: &Zval, element: &Type, items: &mut Vec<Self>) -> Result<(), ConvertError> {
+        if let Some(bytes) = value.zend_str().filter(|_| value.is_string()) {
+            items.extend_from_slice(bytes.as_bytes());
+            return Ok(());
+        }
+        items.push(Self::from_val(scalar(value, element)?).unwrap_or_default());
+        Ok(())
     }
 
     /// Bytes come as a binary string, as `list<u8>` does.
@@ -85,6 +125,13 @@ impl Item for bool {
         zval.set_bool(self);
         zval
     }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::Bool(b) => Some(b),
+            _ => None,
+        }
+    }
 }
 
 impl Item for f32 {
@@ -92,6 +139,13 @@ impl Item for f32 {
         let mut zval = Zval::new();
         zval.set_double(f64::from(self));
         zval
+    }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::Float32(n) => Some(n),
+            _ => None,
+        }
     }
 }
 
@@ -101,11 +155,25 @@ impl Item for f64 {
         zval.set_double(self);
         zval
     }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::Float64(n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 impl Item for char {
     fn to_zval(self) -> Zval {
         String::from(self).to_zval()
+    }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::Char(c) => Some(c),
+            _ => None,
+        }
     }
 }
 
@@ -114,6 +182,13 @@ impl Item for String {
         let mut zval = Zval::new();
         let _ = zval.set_string(&self, false);
         zval
+    }
+
+    fn from_val(val: Val) -> Option<Self> {
+        match val {
+            Val::String(s) => Some(s),
+            _ => None,
+        }
     }
 }
 
@@ -310,6 +385,21 @@ macro_rules! payloads {
             }
         }
 
+        /// A component stream fed by a PHP iterable.
+        pub fn feed(
+            ctx: &mut StoreContextMut<'_, HostState>,
+            value: &Zval,
+            element: Option<Type>,
+        ) -> Result<Val, ConvertError> {
+            match &element {
+                $(Some(element @ $kind) => feed_with::<$ty>(ctx, value, element),)*
+                _ => Err(ConvertError::Runtime(format!(
+                    "streams of {} are not supported yet",
+                    element.map_or_else(|| "nothing".to_string(), |ty| crate::component::wit_type(&ty))
+                ))),
+            }
+        }
+
         /// What the event loop polls until a chunk arrives; Send, unlike Pipe's owner.
         enum Waiter {
             $($variant(Shared<$ty>)),*
@@ -339,6 +429,192 @@ payloads! {
     Bool(bool) = Type::Bool,
     Char(char) = Type::Char,
     String(String) = Type::String,
+}
+
+/// What a feeding producer and the PHP side advancing its iterator share.
+struct FeedInner<T> {
+    items: Vec<T>,
+    started: bool,
+    done: bool,
+    failed: bool,
+    /// A request to advance the iterator is out.
+    asked: bool,
+    waker: Option<Waker>,
+}
+
+/// Feeds a component stream from a PHP iterable. It holds no PHP value, so
+/// wasmtime may drop it anywhere: the iterator stays in the store's values,
+/// and each chunk is produced by the poll loop on the PHP stack.
+struct Feed<T> {
+    shared: Arc<Mutex<FeedInner<T>>>,
+    iterator: Option<ValueKey>,
+    element: Type,
+}
+
+fn feed_with<T>(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    value: &Zval,
+    element: &Type,
+) -> Result<Val, ConvertError>
+where
+    T: Item + wasmtime::component::Lower + wasmtime::component::Lift,
+{
+    let expected = || {
+        ConvertError::Type(format!(
+            "expected iterable for stream<{}>, got {}",
+            crate::component::wit_type(element),
+            debug_type(value)
+        ))
+    };
+    let mut items = Vec::new();
+    let iterator = if let Some(array) = value.array() {
+        for item in array.values() {
+            T::extend(item, element, &mut items)?;
+        }
+        None
+    } else {
+        let object = value.object().ok_or_else(expected)?;
+        if !object.instance_of(ce::traversable()) {
+            return Err(expected());
+        }
+        let mut iterator = value.shallow_clone();
+        while let Some(object) = iterator
+            .object()
+            .filter(|object| object.instance_of(ce::aggregate()))
+        {
+            iterator = object
+                .try_call_method("getIterator", vec![])
+                .map_err(|err| ConvertError::Error(err.to_string()))?;
+        }
+        if !iterator
+            .object()
+            .is_some_and(|object| object.instance_of(ce::iterator()))
+        {
+            return Err(expected());
+        }
+        Some(ctx.data_mut().values.insert_ref(iterator))
+    };
+    let feed = Feed {
+        shared: Arc::new(Mutex::new(FeedInner {
+            items,
+            started: false,
+            done: iterator.is_none(),
+            failed: false,
+            asked: false,
+            waker: None,
+        })),
+        iterator,
+        element: element.clone(),
+    };
+    let reader = StreamReader::new(&mut *ctx, feed)
+        .map_err(|err| ConvertError::Runtime(format!("{err:#}")))?;
+    Ok(Val::Stream(reader.try_into_stream_any(&mut *ctx).map_err(
+        |err| ConvertError::Runtime(format!("{err:#}")),
+    )?))
+}
+
+impl<T> StreamProducer<HostState> for Feed<T>
+where
+    T: Item + wasmtime::component::Lower + wasmtime::component::Lift,
+{
+    type Item = T;
+    type Buffer = VecBuffer<T>;
+
+    fn poll_produce<'a>(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<'a, HostState>,
+        mut destination: Destination<'a, T, VecBuffer<T>>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let this = self.get_mut();
+        let mut inner = this
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.failed {
+            // Its exception stays pending, and the PHP entry point rethrows it.
+            return Poll::Ready(Err(wasmtime::Error::msg(
+                "the PHP iterable feeding the stream failed",
+            )));
+        }
+        if !inner.items.is_empty() {
+            destination.set_buffer(VecBuffer::from(std::mem::take(&mut inner.items)));
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        if inner.done {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        if finish {
+            return Poll::Ready(Ok(StreamResult::Cancelled));
+        }
+        inner.waker = Some(cx.waker().clone());
+        if !inner.asked {
+            inner.asked = true;
+            drop(inner);
+            let Some(key) = &this.iterator else {
+                return Poll::Pending;
+            };
+            let iterator = store.data().values.get(key.key()).shallow_clone();
+            let shared = this.shared.clone();
+            let element = this.element.clone();
+            let handle = store::of(&store);
+            let id = handle.next_request_id();
+            handle.put_request(Request {
+                id,
+                access: Active::Unavailable,
+                callee: Callee::Feed(Box::new(move || advance(&iterator, &shared, &element))),
+                args: Vec::new(),
+                suspending: false,
+            });
+        }
+        Poll::Pending
+    }
+}
+
+/// Moves the PHP iterator one element on and leaves its items for the producer.
+fn advance<T: Item>(iterator: &Zval, shared: &Arc<Mutex<FeedInner<T>>>, element: &Type) {
+    let lock = || {
+        shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    let started = std::mem::replace(&mut lock().started, true);
+    let mut items = Vec::new();
+    let outcome: Result<bool, Option<ConvertError>> = (|| {
+        let object = iterator.object().ok_or(None)?;
+        object
+            .try_call_method(if started { "next" } else { "rewind" }, vec![])
+            .map_err(|_| None)?;
+        let valid = object.try_call_method("valid", vec![]).map_err(|_| None)?;
+        if !valid.bool().unwrap_or(false) {
+            return Ok(false);
+        }
+        let current = object
+            .try_call_method("current", vec![])
+            .map_err(|_| None)?;
+        T::extend(&current, element, &mut items).map_err(Some)?;
+        Ok(true)
+    })();
+    let waker = {
+        let mut inner = lock();
+        inner.asked = false;
+        match outcome {
+            Ok(true) => inner.items.extend(items),
+            Ok(false) => inner.done = true,
+            Err(error) => {
+                if let Some(error) = error {
+                    // An iterator method that threw left its exception pending already.
+                    ext_php_rs::exception::PhpException::from(error).throw();
+                }
+                inner.failed = true;
+            }
+        }
+        inner.waker.take()
+    };
+    if let Some(waker) = waker {
+        waker.wake();
+    }
 }
 
 enum State {
