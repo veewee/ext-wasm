@@ -13,6 +13,8 @@ mod instance;
 mod limits;
 mod memory;
 mod module;
+mod precompiled;
+mod serializer;
 mod store;
 mod suspend;
 mod table;
@@ -99,6 +101,7 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<component::error::ComponentError>()
         .class::<module::Module>()
         .class::<component::Component>()
+        .class::<serializer::Serializer>()
         .class::<component::func::Func>()
         .class::<component::exports::ExportsIterator>()
         .class::<component::exports::Exports>()

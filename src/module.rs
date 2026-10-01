@@ -76,6 +76,17 @@ impl Module {
 }
 
 impl Module {
+    pub fn from_parts(inner: wasmtime::Module, custom_sections: Vec<(String, Vec<u8>)>) -> Self {
+        Self {
+            inner,
+            custom_sections,
+        }
+    }
+
+    pub fn sections(&self) -> &[(String, Vec<u8>)] {
+        &self.custom_sections
+    }
+
     pub fn compile(bytes: &[u8]) -> PhpResult<Self> {
         let binary = wat::parse_bytes(bytes).map_err(compile_error)?;
         let inner = compile_in_process_pool(|| wasmtime::Module::from_binary(engine(), &binary))

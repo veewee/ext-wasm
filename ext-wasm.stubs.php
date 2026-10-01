@@ -213,6 +213,64 @@ namespace Wasm {
     }
 
     /**
+     * Turns compiled modules and components into precompiled artifacts and back,
+     * so production can load them without compiling.
+     *
+     * An artifact is native machine code. Only load artifacts you built yourself
+     * and stored where nobody else can write: a crafted artifact can run any code
+     * with the rights of PHP, like loading an extension. The checksum in an artifact
+     * catches corruption, not tampering.
+     *
+     * An artifact loads only on a host with the same OS and CPU architecture, a
+     * CPU with at least the features of the one that built it, the same wasmtime
+     * major version and ext-wasm engine settings that wasmtime accepts as
+     * compatible; anything else is a CompileError.
+     */
+    class Serializer {
+        public function __construct() {}
+
+        /**
+         * @param string $artifact
+         * @return \Wasm\Component\Component
+         */
+        public function deserializeComponent(string $artifact): \Wasm\Component\Component {}
+
+        /**
+         * Reads local files only and honours open_basedir.
+         *
+         * @param string $path
+         * @return \Wasm\Component\Component
+         */
+        public function deserializeComponentFile(string $path): \Wasm\Component\Component {}
+
+        /**
+         * @param string $artifact
+         * @return \Wasm\Module
+         */
+        public function deserializeModule(string $artifact): \Wasm\Module {}
+
+        /**
+         * Reads local files only and honours open_basedir.
+         *
+         * @param string $path
+         * @return \Wasm\Module
+         */
+        public function deserializeModuleFile(string $path): \Wasm\Module {}
+
+        /**
+         * @param \Wasm\Component\Component $component
+         * @return string
+         */
+        public function serializeComponent(\Wasm\Component\Component $component): string {}
+
+        /**
+         * @param \Wasm\Module $module
+         * @return string
+         */
+        public function serializeModule(\Wasm\Module $module): string {}
+    }
+
+    /**
      * Groups wasm objects so they can be combined.
      *
      * An object created without a store joins the store of the wasm objects it
