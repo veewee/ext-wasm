@@ -25,12 +25,13 @@ final class ComponentUdpTest extends TestCase
 
     private static ?Component $component = null;
 
-    /** @var list<array{resource, string}> running servers and their logs */
+    /** @var list<array{resource, resource, string}> running servers, their stdout and their logs */
     private array $servers = [];
 
     protected function tearDown(): void
     {
-        foreach ($this->servers as [$process, $log]) {
+        foreach ($this->servers as [$process, $stdout, $log]) {
+            fclose($stdout);
             proc_terminate($process);
             proc_close($process);
             @unlink($log);
@@ -60,12 +61,13 @@ final class ComponentUdpTest extends TestCase
         $process = proc_open($arguments, [1 => ['pipe', 'w']], $pipes);
         $port = trim((string) fgets($pipes[1]));
         if (!ctype_digit($port)) {
+            fclose($pipes[1]);
             proc_terminate($process);
             proc_close($process);
             @unlink($log);
             self::markTestSkipped("cannot listen on UDP: $port");
         }
-        $this->servers[] = [$process, $log];
+        $this->servers[] = [$process, $pipes[1], $log];
 
         return [(int) $port, $log];
     }

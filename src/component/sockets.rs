@@ -6,12 +6,12 @@
 //! therefore checked by resolving it on the host when the guest connects. UDP
 //! name rules are resolved once, when the rules are set up: wasmtime-wasi
 //! reports a send whose check is still pending as sent and the refusal only on
-//! the next send (p2/udp.rs, poll_or_spawn), so every UDP check has to be
-//! ready on its first poll, and a lookup per datagram would cost too much.
+//! the next send (p2/udp.rs, poll_or_spawn), so the check for a send has to be
+//! ready on its first poll.
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::types::{ZendHashTable, Zval};
@@ -144,22 +144,27 @@ fn contains(network: IpAddr, prefix: u8, ip: IpAddr) -> bool {
     }
 }
 
-/// Resolves on tokio's blocking pool of the runtime the check is polled on.
-/// Never block_on here: the check already runs inside wasmtime-wasi's block_on.
-/// A lookup that takes longer than `limit` counts as failed.
-async fn resolve(name: String, limit: Option<Duration>) -> Option<Vec<IpAddr>> {
-    let lookup = tokio::task::spawn_blocking(move || {
-        (name.as_str(), 0).to_socket_addrs().map(|addresses| {
+/// The addresses `name` resolves to, canonicalised as connect addresses are.
+fn lookup(name: &str) -> Vec<IpAddr> {
+    (name, 0)
+        .to_socket_addrs()
+        .map(|addresses| {
             addresses
                 .map(|address| address.ip().to_canonical())
                 .collect()
         })
-    });
-    let result = match limit {
-        Some(limit) => tokio::time::timeout(limit, lookup).await.ok()?,
-        None => lookup.await,
-    };
-    result.ok()?.ok()
+        .unwrap_or_default()
+}
+
+/// Resolves on tokio's blocking pool of the runtime the check is polled on.
+/// Never block_on here: the check already runs inside wasmtime-wasi's block_on.
+/// A lookup that takes longer than `limit` counts as failed.
+async fn resolve(name: String, limit: Option<Duration>) -> Option<Vec<IpAddr>> {
+    let task = tokio::task::spawn_blocking(move || lookup(&name));
+    match limit {
+        Some(limit) => tokio::time::timeout(limit, task).await.ok()?.ok(),
+        None => task.await.ok(),
+    }
 }
 
 /// IP rules first, so a connect they allow waits for no lookup; then each
@@ -204,43 +209,70 @@ pub fn parse_hosts(hosts: &ZendHashTable, list: &str) -> PhpResult<Vec<Rule>> {
         .collect()
 }
 
-/// Resolves `name` on a thread of its own and waits at most `limit`. Called on
-/// the PHP thread, which may already be inside a tokio runtime (PHP code in a
-/// host import), where block_on would panic.
-fn resolve_now(name: &str, limit: Option<Duration>) -> Vec<IpAddr> {
-    let (sender, receiver) = mpsc::channel();
-    let owned = name.to_owned();
-    std::thread::spawn(move || {
-        let addresses = (owned.as_str(), 0)
-            .to_socket_addrs()
-            .map(|addresses| {
-                addresses
-                    .map(|address| address.ip().to_canonical())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let _ = sender.send(addresses);
-    });
-    match limit {
-        Some(limit) => receiver.recv_timeout(limit).unwrap_or_default(),
-        None => receiver.recv().unwrap_or_default(),
-    }
-}
-
-/// UDP rules as networks and ports, with name rules resolved now.
+/// UDP rules as networks and ports, with every distinct name resolved now,
+/// all at once and within one `limit` in total. This runs on the PHP thread,
+/// which may already be inside a tokio runtime (PHP code in a host import),
+/// where block_on would panic, so each lookup gets a plain thread. A name that
+/// fails, times out or gets no thread allows nothing.
 fn resolved(rules: &[Rule], limit: Option<Duration>) -> Vec<(IpAddr, u8, Option<u16>)> {
+    let mut names: Vec<&str> = Vec::new();
+    for rule in rules {
+        if let Target::Name(name) = &rule.target
+            && !names.contains(&name.as_str())
+        {
+            names.push(name);
+        }
+    }
+    let pending: Vec<_> = names
+        .iter()
+        .map(|&name| {
+            let (sender, receiver) = mpsc::channel();
+            let owned = name.to_owned();
+            let started = std::thread::Builder::new()
+                .name("wasm-udp-lookup".into())
+                .spawn(move || {
+                    let _ = sender.send(lookup(&owned));
+                });
+            (name, started.ok().map(|_| receiver))
+        })
+        .collect();
+    let deadline = limit.map(|limit| Instant::now() + limit);
+    let mut addresses: Vec<(&str, Vec<IpAddr>)> = Vec::new();
+    for (name, receiver) in pending {
+        let result = receiver.and_then(|receiver| match deadline {
+            Some(deadline) => receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok(),
+            None => receiver.recv().ok(),
+        });
+        addresses.push((name, result.unwrap_or_default()));
+    }
+
     let mut networks = Vec::new();
     for rule in rules {
         match &rule.target {
             Target::Network(network, prefix) => networks.push((*network, *prefix, rule.port)),
             Target::Name(name) => {
-                for ip in resolve_now(name, limit) {
+                let ips = addresses
+                    .iter()
+                    .find(|(resolved, _)| resolved == name)
+                    .map(|(_, ips)| ips.as_slice())
+                    .unwrap_or_default();
+                for &ip in ips {
                     networks.push((ip, if ip.is_ipv4() { 32 } else { 128 }, rule.port));
                 }
             }
         }
     }
     networks
+}
+
+/// Whether a UDP datagram to or from `address` is allowed.
+fn udp_allows(networks: &[(IpAddr, u8, Option<u16>)], address: SocketAddr) -> bool {
+    let ip = address.ip().to_canonical();
+    networks.iter().any(|&(network, prefix, port)| {
+        port.is_none_or(|port| port == address.port()) && contains(network, prefix, ip)
+    })
 }
 
 /// Lets the guest connect to what `tcp` allows and exchange datagrams with what
@@ -265,7 +297,6 @@ pub fn allow(
         let tcp = tcp.clone();
         let udp = udp.clone();
         Box::pin(async move {
-            let ip = address.ip().to_canonical();
             match use_ {
                 // Every connect and send binds to the wildcard address first,
                 // which an explicit bind to it cannot be told apart from.
@@ -273,12 +304,7 @@ pub fn allow(
                     address.ip().is_unspecified() && address.port() == 0
                 }
                 SocketAddrUse::TcpConnect => allowed(&tcp, address, lookup_limit).await,
-                SocketAddrUse::UdpSend | SocketAddrUse::UdpReceive => {
-                    udp.iter().any(|&(network, prefix, port)| {
-                        port.is_none_or(|port| port == address.port())
-                            && contains(network, prefix, ip)
-                    })
-                }
+                SocketAddrUse::UdpSend | SocketAddrUse::UdpReceive => udp_allows(&udp, address),
                 _ => false,
             }
         })
@@ -334,6 +360,18 @@ mod tests {
     fn a_prefix_beyond_the_width_never_widens_a_match() {
         let ip = |text: &str| text.parse::<IpAddr>().unwrap();
         assert!(!contains(ip("10.0.0.0"), 104, ip("11.0.0.1")));
+    }
+
+    #[test]
+    fn udp_allows_by_network_and_port() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let networks = [(ip("127.0.0.1"), 32, Some(8125)), (ip("fd00::"), 8, None)];
+        let address = |text: &str| text.parse::<SocketAddr>().unwrap();
+        assert!(udp_allows(&networks, address("127.0.0.1:8125")));
+        assert!(udp_allows(&networks, address("[::ffff:127.0.0.1]:8125")));
+        assert!(!udp_allows(&networks, address("127.0.0.1:8126")));
+        assert!(udp_allows(&networks, address("[fd12::1]:53")));
+        assert!(!udp_allows(&networks, address("[fe80::1]:53")));
     }
 
     #[test]
