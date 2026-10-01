@@ -1,13 +1,15 @@
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::Zval;
+use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::{StoreContextMut, Val, ValType};
 
 use crate::error::argument_count_error;
 use crate::store::{self, HostState, SharedStore, StoreHandle};
 use crate::suspend;
 use crate::throw::call_error;
+use crate::types::func_type;
 use crate::value::{default_val, results_to_zval, to_val};
 
 /// An exported wasm function, callable from PHP.
@@ -23,6 +25,11 @@ pub struct Func {
 impl Func {
     pub fn __invoke(&self, args: &[&Zval]) -> PhpResult<Zval> {
         call(&self.store, &self.inner, args)
+    }
+
+    /// @return array{parameters: list<string>, results: list<string>}
+    pub fn r#type(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        self.store.with(|ctx| func_type(&self.inner.ty(&ctx)))
     }
 
     /// Number of parameters, like JS `Function.prototype.length`.

@@ -1,14 +1,19 @@
 use crate::limits::limited;
+use ext_php_rs::boxed::ZBox;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
-use wasmtime::{HeapTopType, RefType, TableType};
+use wasmtime::{HeapTopType, TableType, ValType};
 
 use crate::error::{type_error, value_error};
 use crate::func::Func;
 use crate::store::{self, SharedStore, StoreObject};
-use crate::value::{descriptor_int, descriptor_str, downcast, from_ref, to_ref};
+use crate::types::table_type;
+use crate::value::{
+    descriptor_address, descriptor_int, descriptor_minimum, descriptor_str, downcast, from_ref,
+    parse_val_type, to_ref,
+};
 
 /// A table of references, like JS `WebAssembly.Table`.
 #[php_class]
@@ -21,30 +26,38 @@ pub struct Table {
 
 #[php_impl]
 impl Table {
-    /// @param array{element: 'anyfunc'|'externref', initial: int, maximum?: int} $descriptor
+    /// `element` is `funcref`, `externref`, `nullfuncref`, `nullexternref`,
+    /// `(ref func)` or `(ref extern)`; the last two need a `$value`.
+    ///
+    /// @param array{element: string, initial?: int, minimum?: int, maximum?: int, address?: 'i32'|'i64'} $descriptor
     pub fn __construct(
         descriptor: &ZendHashTable,
         value: Option<&Zval>,
         store: Option<&StoreObject>,
     ) -> PhpResult<Self> {
-        let element = match descriptor_str(descriptor, "element")? {
-            Some("anyfunc" | "funcref") => RefType::FUNCREF,
-            Some("externref") => RefType::EXTERNREF,
-            Some(other) => {
-                return Err(type_error(format!(
-                    "unknown table element type \"{other}\""
-                )));
-            }
-            None => return Err(type_error("descriptor \"element\" is required")),
+        let name = descriptor_str(descriptor, "element")?
+            .ok_or_else(|| type_error("descriptor \"element\" is required"))?;
+        let ValType::Ref(element) = parse_val_type(name)? else {
+            return Err(type_error(format!(
+                "table element type \"{name}\" is not a reference type"
+            )));
         };
-        let initial = descriptor_int(descriptor, "initial")?
-            .ok_or_else(|| type_error("descriptor \"initial\" is required"))?;
+        let initial = descriptor_minimum(descriptor)?;
         let maximum = descriptor_int(descriptor, "maximum")?;
-        let ty = TableType::new(
-            element.clone(),
-            to_u32(initial)?,
-            maximum.map(to_u32).transpose()?,
-        );
+        if let Some(maximum) = maximum.filter(|&maximum| maximum < initial) {
+            return Err(value_error(format!(
+                "the minimum size {initial} is above the maximum {maximum}"
+            )));
+        }
+        let ty = if descriptor_address(descriptor)? {
+            TableType::new64(element.clone(), initial as u64, maximum.map(|n| n as u64))
+        } else {
+            TableType::new(
+                element.clone(),
+                to_u32(initial)?,
+                maximum.map(to_u32).transpose()?,
+            )
+        };
         let null = Zval::null();
         // An externref value is a plain PHP value, even when it is a wasm object.
         let from = value
@@ -94,6 +107,14 @@ impl Table {
                 .map(|previous| previous as i64)
                 .map_err(|err| value_error(format!("{err:#}")))
         })
+    }
+
+    /// The table's type, with its current length as `minimum`.
+    ///
+    /// @return array{element: string, minimum: int, maximum?: int, address?: 'i64'}
+    pub fn r#type(&self) -> PhpResult<ZBox<ZendHashTable>> {
+        self.store
+            .with(|ctx| table_type(&self.inner.ty(&ctx), self.inner.size(&ctx)))
     }
 
     pub fn length(&self) -> i64 {

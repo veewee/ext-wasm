@@ -11,6 +11,7 @@ use ext_php_rs::types::ZendHashTable;
 use crate::engine::{compile_in_process_pool, engine};
 use crate::error::{compile_error, wasm_exception};
 use crate::imports::kind;
+use crate::types::extern_type;
 
 #[php_class]
 #[php(name = "Wasm\\Module")]
@@ -36,19 +37,27 @@ impl Module {
         Self::compile(&read_local_file(&path)?)
     }
 
-    /// @return list<array{name: string, kind: string}>
+    /// Each entry's `type` is shaped like the JS type reflection proposal:
+    /// `{parameters, results}` for a function, `{value, mutable}` for a global,
+    /// `{minimum, maximum?}` for a memory, `{element, minimum, maximum?}` for a
+    /// table and `{parameters}` for a tag.
+    ///
+    /// @return list<array{name: string, kind: string, type: array<string, mixed>}>
     pub fn exports(&self) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
         for export in self.inner.exports() {
             let mut entry = ZendHashTable::new();
             entry.insert("name", export.name())?;
             entry.insert("kind", kind(&export.ty()))?;
+            entry.insert("type", extern_type(&export.ty())?)?;
             list.push(entry)?;
         }
         Ok(list)
     }
 
-    /// @return list<array{module: string, name: string, kind: string}>
+    /// `type` is shaped as in exports().
+    ///
+    /// @return list<array{module: string, name: string, kind: string, type: array<string, mixed>}>
     pub fn imports(&self) -> PhpResult<ZBox<ZendHashTable>> {
         let mut list = ZendHashTable::new();
         for import in self.inner.imports() {
@@ -56,6 +65,7 @@ impl Module {
             entry.insert("module", import.module())?;
             entry.insert("name", import.name())?;
             entry.insert("kind", kind(&import.ty()))?;
+            entry.insert("type", extern_type(&import.ty())?)?;
             list.push(entry)?;
         }
         Ok(list)

@@ -82,12 +82,24 @@ Wasm\compile($bytes);                             // Wasm\Module
 Wasm\instantiate($bytes, $imports);               // ['module' => Module, 'instance' => Instance]
 Wasm\instantiate($module, $imports);              // Instance
 
-$module->exports();                               // [['name' => 'add', 'kind' => 'function'], ...]
-$module->imports();                               // [['module' => 'env', 'name' => 'log', 'kind' => 'function'], ...]
+$module->exports();                               // [['name' => 'add', 'kind' => 'function', 'type' => [...]], ...]
+$module->imports();                               // [['module' => 'env', 'name' => 'log', 'kind' => 'function', 'type' => [...]], ...]
 $module->customSections('name');                  // list of binary strings
 ```
 
 JS has these three as static functions on `WebAssembly.Module`. Here they are methods of the module.
+
+Each import and export carries its `type`, shaped as in the JS type reflection proposal ([WebAssembly/js-types](https://github.com/WebAssembly/js-types)), which also lets codegen derive PHP signatures from a core module:
+
+| Kind | `type` |
+|---|---|
+| function | `['parameters' => ['i32', 'i64'], 'results' => ['f64']]` |
+| global | `['value' => 'i32', 'mutable' => true]` |
+| memory | `['minimum' => 1, 'maximum' => 4]` |
+| table | `['element' => 'funcref', 'minimum' => 2]` |
+| tag | `['parameters' => ['i32']]` |
+
+`maximum` is left out when there is none, and a 64-bit memory or table adds `'address' => 'i64'`. A 64-bit limit beyond PHP's int range comes out as a float, as PHP's own integer overflow does. Tags are not part of the proposal, so their shape follows the `Tag` constructor. Value types are named `i32`, `i64`, `f32`, `f64`, `v128`, `funcref` and `externref` (the JS API's spelling `anyfunc` is accepted as input). Other nullable references use their text-format names (`anyref`, `eqref`, `i31ref`, `structref`, `arrayref`, `exnref`, `nullref`, `nullfuncref`, `nullexternref`, `nullexnref`), and non-nullable ones the long form, such as `(ref func)`. A reference to a type the module defines is named by its kind only, such as `(ref null (concrete func))`, because wasmtime does not expose the module's type index. A component's `exports()` uses `type` for its WIT signature, a string, so the key holds a string there and an array here.
 
 `Module::fromFile()` reads local files only, relative to PHP's working directory and within `open_basedir`. Use `file_get_contents()` for stream wrappers such as `phar://`.
 
@@ -131,6 +143,8 @@ $global->value = 43;
 ```
 
 `Global` is a reserved word in PHP, which is why the class is called `GlobalVar`. PHP has no shared `ArrayBuffer`, so memory is read and written through copies instead of a live view.
+
+`type()` on a `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` gives the same shape as `exports()`, with the current size of a memory or table as `minimum`. The constructors take `minimum` as well as `initial`, and `address`, so a type goes back in: `new Wasm\Memory($memory->type())`. That works for numeric types and for func and extern references; a `GlobalVar` or `Table` of `(ref func)` or `(ref extern)` needs a value to start with, and a 64-bit limit that came out as a float does not go back in. Other reference types, such as `anyref`, cannot hold a PHP value and are a `TypeError`.
 
 ### Stores
 

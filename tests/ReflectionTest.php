@@ -26,7 +26,7 @@ final class ReflectionTest extends TestCase
             ['name' => 'g', 'kind' => 'global'],
             ['name' => 't', 'kind' => 'table'],
             ['name' => 'e', 'kind' => 'tag'],
-        ], $module->exports());
+        ], self::withoutTypes($module->exports()));
     }
 
     public function test_it_lists_imports(): void
@@ -40,7 +40,7 @@ final class ReflectionTest extends TestCase
         self::assertSame([
             ['module' => 'env', 'name' => 'log', 'kind' => 'function'],
             ['module' => 'js', 'name' => 'mem', 'kind' => 'memory'],
-        ], $module->imports());
+        ], self::withoutTypes($module->imports()));
     }
 
     public function test_it_reads_custom_sections(): void
@@ -49,6 +49,21 @@ final class ReflectionTest extends TestCase
 
         self::assertSame(['first', "sec\0ond"], $module->customSections('meta'));
         self::assertSame([], $module->customSections('missing'));
+    }
+
+    /**
+     * Types are checked in TypeReflectionTest.
+     *
+     * @param list<array<string, mixed>> $entries
+     * @return list<array<string, mixed>>
+     */
+    private static function withoutTypes(array $entries): array
+    {
+        return array_map(static function (array $entry): array {
+            unset($entry['type']);
+
+            return $entry;
+        }, $entries);
     }
 
     /** @param list<array{string, string}> $sections */
