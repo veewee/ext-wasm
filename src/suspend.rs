@@ -62,7 +62,24 @@ pub enum Callee {
     Component(Target, Zval),
     /// Advances a PHP iterator that feeds a component stream; it leaves its
     /// items with the stream's producer and answers nothing.
-    Feed(Box<dyn FnOnce()>),
+    Feed(FeedRequest),
+}
+
+/// A request to advance the PHP iterator feeding a component stream.
+pub struct FeedRequest {
+    pub iterator: Zval,
+    /// The state the stream's producer shares; wasmtime drops the producer
+    /// with the stream, which leaves this dangling.
+    pub producer: std::sync::Weak<dyn std::any::Any>,
+    pub advance: Box<dyn FnOnce(&Zval)>,
+}
+
+impl FeedRequest {
+    /// Whether the component dropped the stream, so nobody reads what an
+    /// advance would produce.
+    pub fn orphaned(&self) -> bool {
+        self.producer.strong_count() == 0
+    }
 }
 
 /// What the callback returned, or the message of its failure. An exception
@@ -268,10 +285,16 @@ fn call_parked(store: &StoreHandle, request: Request) {
     } = request;
     let _parked = store.park(access);
     let block = || (!suspending).then(FiberSwitchBlock::new);
-    if let Callee::Feed(advance) = callee {
+    if let Callee::Feed(FeedRequest {
+        iterator, advance, ..
+    }) = callee
+    {
         let _no_fiber_switch = block();
         drop(store.take_garbage());
-        advance();
+        advance(&iterator);
+        // Inside the block: the last reference may go here, and a generator's
+        // `finally` must not switch Fibers while the store is parked.
+        drop(iterator);
         return;
     }
     {

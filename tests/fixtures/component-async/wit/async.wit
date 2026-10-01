@@ -37,6 +37,10 @@ world async-demo {
     export first: async func(s: stream<u32>) -> u32;
     /// The sum of the numbers read.
     export sum: async func(s: stream<u32>) -> u64;
+    /// The sum of the numbers read, by a sync export that blocks on the stream.
+    export sync-sum: func(s: stream<u32>) -> u64;
+    /// The first number of whichever stream gives one first; both are dropped then.
+    export race: async func(a: stream<u32>, b: stream<u32>) -> u32;
     /// The number of bytes read.
     export length: async func(s: stream<u8>) -> u64;
     /// "hello, <name>" as a future.
