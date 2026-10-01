@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
 use Wasm\Component\Exports;
 use Wasm\Component\Instance;
+use Wasm\Exception\RuntimeError;
 use Wasm\Suspending;
 use Wasm\Wasi;
 
@@ -84,6 +85,59 @@ final class ComponentAsyncTest extends TestCase
 
         self::assertSame([1, 2], [$first, $second]);
         self::assertSame(300, $fiber->getReturn());
+    }
+
+    public function test_an_async_import_cannot_call_back_into_its_instance(): void
+    {
+        $exports = null;
+        $error = null;
+        $exports = self::demo(function (int $n) use (&$exports, &$error): int {
+            try {
+                $exports->run(1);
+            } catch (RuntimeError $e) {
+                $error = $e->getMessage();
+            }
+
+            return $n;
+        });
+
+        self::assertSame(5, $exports->run(4));
+        self::assertSame('the store is busy with a suspended call', $error);
+    }
+
+    public function test_an_async_component_stays_usable_after_an_import_throws(): void
+    {
+        $throw = true;
+        $exports = self::demo(function (int $n) use (&$throw): int {
+            if ($throw) {
+                throw new \RuntimeException('boom');
+            }
+
+            return $n;
+        });
+
+        try {
+            $exports->run(1);
+            self::fail('the import did not throw');
+        } catch (\RuntimeException $e) {
+            self::assertSame('boom', $e->getMessage());
+        }
+        $throw = false;
+        self::assertSame(3, $exports->run(2));
+    }
+
+    public function test_an_async_component_stays_usable_after_its_fiber_is_destroyed_mid_call(): void
+    {
+        $exports = self::demo(new Suspending(fn (int $n): int => \Fiber::suspend() + $n));
+        $fiber = new \Fiber(fn (): int => $exports->run(1));
+        $fiber->start();
+        unset($fiber);
+        gc_collect_cycles();
+
+        $again = new \Fiber(fn (): int => $exports->run(2));
+        $again->start();
+        $again->resume(5);
+        self::assertSame(8, $again->getReturn());
     }
 
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void
