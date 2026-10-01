@@ -45,6 +45,8 @@ impl Suspending {
 
 /// A PHP callback that wasm is waiting for.
 pub struct Request {
+    /// Matches the response to the call waiting for it.
+    pub id: u64,
     /// The store access of the waiting call, for PHP code the callback runs.
     pub access: Active,
     pub callee: Callee,
@@ -58,6 +60,9 @@ pub enum Callee {
     Callable(Zval),
     /// A component import: a callable or a method of a resource's PHP class.
     Component(Target, Zval),
+    /// Advances a PHP iterator that feeds a component stream; it leaves its
+    /// items with the stream's producer and answers nothing.
+    Feed(Box<dyn FnOnce()>),
 }
 
 /// What the callback returned, or the message of its failure. An exception
@@ -85,6 +90,7 @@ pub fn async_host_func(
             suspending,
             result_types: result_types.clone(),
             requested: false,
+            id: 0,
         })
     })
 }
@@ -99,6 +105,7 @@ struct HostCall<'a> {
     suspending: bool,
     result_types: Vec<ValType>,
     requested: bool,
+    id: u64,
 }
 
 impl Future for HostCall<'_> {
@@ -125,7 +132,10 @@ impl Future for HostCall<'_> {
                 }
             }
             let callable = ctx.data().values.get(this.key).shallow_clone();
+            let id = store.next_request_id();
+            this.id = id;
             store.put_request(Request {
+                id,
                 // The future is pinned inside wasmtime, so this address holds until it is dropped.
                 access: Active::Core((&mut this.caller as *mut Caller<'_, HostState>).cast()),
                 callee: Callee::Callable(callable),
@@ -136,7 +146,7 @@ impl Future for HostCall<'_> {
             return Poll::Pending;
         }
 
-        let Some(returned) = store.take_response() else {
+        let Some(returned) = store.take_response(this.id) else {
             return Poll::Ready(Err(wasmtime::Error::msg(
                 "wasm resumed a PHP callback that has not returned",
             )));
@@ -166,13 +176,53 @@ pub fn drive<R>(
     store: &StoreHandle,
     future: impl Future<Output = wasmtime::Result<R>>,
 ) -> wasmtime::Result<R> {
+    drive_with(store, future, false)
+}
+
+/// `drive` for wasmtime's public event loop, which keeps polling a future
+/// nobody can complete: it throws once a poll leaves no request and wakes
+/// nothing, three times in a row. Every WASI and HTTP host function the
+/// extension links is synchronous, so a component waiting on I/O blocks
+/// inside a poll rather than leaving the loop idle.
+pub fn drive_until_idle<R>(
+    store: &StoreHandle,
+    future: impl Future<Output = wasmtime::Result<R>>,
+) -> wasmtime::Result<R> {
+    drive_with(store, future, true)
+}
+
+struct Flag(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for Flag {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn drive_with<R>(
+    store: &StoreHandle,
+    future: impl Future<Output = wasmtime::Result<R>>,
+    detect_idle: bool,
+) -> wasmtime::Result<R> {
     let _clear = ClearSlots(store);
     // Declared after the guard, so the future is dropped first: wasmtime then
     // unwinds a parked call before the slots and the caller pointer go.
     let mut future = pin!(future);
-    let mut cx = Context::from_waker(Waker::noop());
+    let flag = std::sync::Arc::new(Flag(std::sync::atomic::AtomicBool::new(false)));
+    let waker = if detect_idle {
+        Waker::from(flag.clone())
+    } else {
+        Waker::noop().clone()
+    };
+    let mut cx = Context::from_waker(&waker);
     let runtime = store.uses_wasi().then(crate::engine::wasi_runtime);
+    let mut idle = 0;
     loop {
+        flag.0.store(false, std::sync::atomic::Ordering::SeqCst);
         // Entered for this poll only: the PHP callback between polls may
         // suspend the Fiber, and another Fiber's guard may come and go meanwhile.
         let polled = {
@@ -183,8 +233,22 @@ pub fn drive<R>(
             return result;
         }
         // Without a request wasmtime only yielded, for example inside its GC.
-        if let Some(request) = store.take_request() {
+        let mut asked = false;
+        while let Some(request) = store.take_request() {
+            asked = true;
             call_parked(store, request);
+        }
+        if detect_idle {
+            idle = if asked || flag.0.load(std::sync::atomic::Ordering::SeqCst) {
+                0
+            } else {
+                idle + 1
+            };
+            if idle >= 3 {
+                return Err(wasmtime::Error::msg(
+                    "the component cannot make progress: it waits for something that never happens",
+                ));
+            }
         }
     }
 }
@@ -196,6 +260,7 @@ pub fn drive<R>(
 /// point's own error is not thrown over the pending one, so PHP keeps unwinding.
 fn call_parked(store: &StoreHandle, request: Request) {
     let Request {
+        id,
         access,
         callee,
         args,
@@ -203,6 +268,12 @@ fn call_parked(store: &StoreHandle, request: Request) {
     } = request;
     let _parked = store.park(access);
     let block = || (!suspending).then(FiberSwitchBlock::new);
+    if let Callee::Feed(advance) = callee {
+        let _no_fiber_switch = block();
+        drop(store.take_garbage());
+        advance();
+        return;
+    }
     {
         // What the previous callback returned. Releasing it can run PHP
         // destructors, which may use wasm objects again.
@@ -218,6 +289,7 @@ fn call_parked(store: &StoreHandle, request: Request) {
                 ZendCallable::new(callable).and_then(|callable| callable.try_call(args))
             }
             Callee::Component(target, callable) => call_target(target, callable, &args),
+            Callee::Feed(_) => unreachable!("handled above"),
         }
     };
     {
@@ -225,7 +297,7 @@ fn call_parked(store: &StoreHandle, request: Request) {
         let _no_fiber_switch = block();
         drop((args, callee));
     }
-    store.put_response(returned.map_err(|err| err.to_string()));
+    store.put_response(id, returned.map_err(|err| err.to_string()));
 }
 
 struct ClearSlots<'a>(&'a StoreHandle);

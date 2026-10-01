@@ -271,6 +271,22 @@ wasmtime's component linker cannot define an import from another instance's expo
 
 A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface, and then suspends its Fiber as core imports do (see [Async imports](#async-imports)). Every other PHP import of that instance still blocks Fiber switches, and while a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call". Resource constructors and methods implemented by PHP classes cannot suspend. A component's resource destructor runs where PHP releases the handle and cannot suspend either: a `Suspending` import it calls may return, but one that suspends throws a `FiberError` there and, like any failed call, leaves the instance unusable.
 
+Components built for the async component model work too: `async func` exports and imports, `stream<T>` and `future<T>`. PHP calls an async export like any other function, and the call returns once the component returned its result; work the component started, such as writing a stream it returned, goes on while PHP reads. An `async func` import is a PHP callable, and as a `Wasm\Suspending` it may suspend its Fiber. A component can have several import calls waiting at once, and PHP runs them one after another. PHP code inside an async import cannot call into its own instance, which is the busy error.
+
+```php
+$exports = (new Instance($component, ['slow' => new Wasm\Suspending($slow)], new Wasm\Wasi()))->exports;
+
+$stream = $exports->countUp(5);           // a Wasm\Component\Stream
+foreach ($stream as $chunk) { ... }        // each chunk is a list of numbers
+$exports->length($generator);              // a PHP iterable where the component takes a stream
+$exports->greetLater('ada')->await();      // a Wasm\Component\Future: 'hello, ada'
+$exports->awaitValue('hi');                // a PHP value where the component takes a future
+```
+
+`Stream::read()` returns the next chunk, `null` at the end, and iterating a stream gives its chunks; a `stream<u8>` comes in binary strings, other streams as lists of values. The component writes only while PHP reads, so an endless stream does not fill memory, and a stream dropped unread is closed. Where a component takes a stream, PHP passes an array, an `Iterator` or an `IteratorAggregate`, which the component reads lazily; for a `stream<u8>` every element is a string of bytes. `Future::await()` returns the value, the same on every call. Streams and futures carry `bool`, numbers and `string`, and futures carry `char` too (wasmtime rejects `stream<char>` when compiling); a component whose imports carry anything else in them fails to link, and an export that returns one throws when called. A read that can never progress, because the component waits for something that never happens, throws a `RuntimeError` instead of hanging.
+
+Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable. wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
+
 Components cannot be combined with core objects: a component instance has a store of its own. A component that uses `map` or fixed-length lists fails to compile with a `CompileError`.
 
 [examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
@@ -326,7 +342,7 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and ten larger ones:
+The [examples](examples) folder has small scripts for each feature, and eleven larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
@@ -336,6 +352,7 @@ The [examples](examples) folder has small scripts for each feature, and ten larg
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
 - [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
 - [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
+- [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
 - [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
 - [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
@@ -358,7 +375,7 @@ The cache holds machine code that runs inside the PHP process, so anyone who can
 - wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance, or an object the instance imports, keeps that instance and its store alive until the PHP process ends.
 - A plain PHP callback cannot switch Fibers while wasm waits for it: `Fiber::suspend()` inside it throws a `FiberError`. Wrap the callback in `Wasm\Suspending` to allow it (see [Async imports](#async-imports)). Calling wasm from inside a Fiber, and suspending between calls, works as usual.
-- WASI covers preview1 for core modules and preview2 for components, not the async preview3. File access in a forked child after the parent used WASI is tested for both. A program that waits on a file and a timer at once in a forked child has not been tested.
+- WASI covers preview1 for core modules and preview2 for components. The async component model runs (see [Components](#components)), but the WASI 0.3 interfaces are not linked yet. File access in a forked child after the parent used WASI is tested for both. A program that waits on a file and a timer at once in a forked child has not been tested.
 
 ## Development
 

@@ -118,12 +118,29 @@ impl ResultValue {
     }
 }
 
-/// Converts a PHP value to a component value of type `ty`.
-pub fn to_val(
-    ctx: &mut StoreContextMut<'_, HostState>,
-    value: &Zval,
-    ty: &Type,
-) -> Result<Val, ConvertError> {
+/// Whether `ty` converts without the store, see `scalar`.
+pub fn is_scalar(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Bool
+            | Type::S8
+            | Type::U8
+            | Type::S16
+            | Type::U16
+            | Type::S32
+            | Type::U32
+            | Type::S64
+            | Type::U64
+            | Type::Float32
+            | Type::Float64
+            | Type::Char
+            | Type::String
+    )
+}
+
+/// Converts a PHP value to a scalar component value, which needs no store,
+/// so it also works where PHP runs without access to it.
+pub fn scalar(value: &Zval, ty: &Type) -> Result<Val, ConvertError> {
     Ok(match ty {
         Type::Bool => Val::Bool(
             value
@@ -164,6 +181,26 @@ pub fn to_val(
             }
         }
         Type::String => Val::String(utf8(value, ty)?.to_string()),
+        _ => return Err(unsupported(ty)),
+    })
+}
+
+/// Converts a PHP value to a component value of type `ty`.
+pub fn to_val(
+    ctx: &mut StoreContextMut<'_, HostState>,
+    value: &Zval,
+    ty: &Type,
+) -> Result<Val, ConvertError> {
+    if is_scalar(ty) {
+        return scalar(value, ty);
+    }
+    if let Type::Stream(stream) = ty {
+        return crate::component::stream::feed(ctx, value, stream.ty());
+    }
+    if let Type::Future(future) = ty {
+        return crate::component::stream::ready_future(ctx, value, future.ty());
+    }
+    Ok(match ty {
         Type::List(list) if matches!(list.ty(), Type::U8) => Val::List(
             value
                 .zend_str()
@@ -428,6 +465,12 @@ pub fn from_val(
                 .find(|meta| meta.ty == handle.ty())
                 .cloned();
             return object(Resource::new(store, meta, *handle).into_zval(false));
+        }
+        (Val::Stream(stream), Type::Stream(ty)) => {
+            return crate::component::stream::Stream::lift(ctx, stream, ty.ty());
+        }
+        (Val::Future(future), Type::Future(ty)) => {
+            return crate::component::stream::Future::lift(ctx, future, ty.ty());
         }
         (Val::Flags(set), Type::Flags(flags)) => {
             let mut table = ZendHashTable::new();

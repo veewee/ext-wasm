@@ -105,6 +105,8 @@ pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<component::instance::Instance>()
         .class::<component::resource::ResourceClass>()
         .class::<component::resource::Resource>()
+        .class::<component::stream::Stream>()
+        .class::<component::stream::Future>()
         .class::<component::types::ValueType>()
         .class::<component::types::FunctionType>()
         .class::<component::http_handler::Request>()

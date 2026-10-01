@@ -495,6 +495,21 @@ namespace Wasm\Component {
     }
 
     /**
+     * A `future<T>` a component returned. `await()` runs the component until
+     * its value is there and returns it, the same value on every call.
+     */
+    class Future {
+        public function __construct() {}
+
+        /**
+         * The value of the future, once the component wrote it.
+         *
+         * @return mixed
+         */
+        public function await(): mixed {}
+    }
+
+    /**
      * An instance of a component, with a store of its own.
      */
     class Instance {
@@ -641,6 +656,49 @@ namespace Wasm\Component {
     }
 
     /**
+     * A `stream<T>` a component returned. `read()` gives the next chunk:
+     * a binary string for `stream<u8>`, a list of values otherwise, `null` at
+     * the end. Iterating gives the chunks too.
+     */
+    class Stream implements \Iterator {
+        public function __construct() {}
+
+        /**
+         * @return string|list<mixed>|null
+         */
+        public function current(): mixed {}
+
+        /**
+         * @return int
+         */
+        public function key(): int {}
+
+        /**
+         * @return void
+         */
+        public function next(): void {}
+
+        /**
+         * The next chunk, or `null` once the stream ended.
+         *
+         * @return string|list<mixed>|null
+         */
+        public function read(): mixed {}
+
+        /**
+         * Starts reading; a stream cannot be read twice, so later calls do nothing.
+         *
+         * @return void
+         */
+        public function rewind(): void {}
+
+        /**
+         * @return bool
+         */
+        public function valid(): bool {}
+    }
+
+    /**
      * A value of a WIT `variant`: the name of its case and the case's payload.
      */
     class Variant {
@@ -755,7 +813,7 @@ namespace Wasm\Component\Type {
         public readonly mixed $cases = null;
 
         /**
-         * The element of a list, or the value of an option.
+         * The element of a list or stream, or the value of an option or future.
          *
          * @return \Wasm\Component\Type\ValueType|null
          *

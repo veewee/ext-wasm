@@ -9,6 +9,7 @@ pub mod http_handler;
 pub mod imports;
 pub mod instance;
 pub mod resource;
+pub mod stream;
 pub mod types;
 pub mod value;
 
@@ -129,7 +130,8 @@ pub fn wit_signature(func: &ComponentFunc, names: &Names) -> String {
         .params()
         .map(|(name, ty)| format!("{name}: {}", wit_named(&ty, names)))
         .collect();
-    let mut signature = format!("func({})", params.join(", "));
+    let keyword = if func.async_() { "async func" } else { "func" };
+    let mut signature = format!("{keyword}({})", params.join(", "));
     let results: Vec<String> = func.results().map(|ty| wit_named(&ty, names)).collect();
     if !results.is_empty() {
         signature.push_str(&format!(" -> {}", results.join(", ")));

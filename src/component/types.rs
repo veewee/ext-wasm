@@ -138,7 +138,7 @@ impl ValueType {
         self.name.clone()
     }
 
-    /// The element of a list, or the value of an option.
+    /// The element of a list or stream, or the value of an option or future.
     ///
     /// @return \Wasm\Component\Type\ValueType|null
     #[php(getter)]
@@ -225,6 +225,16 @@ pub fn value_type(ty: &Type, names: &Names) -> PhpResult<ValueType> {
     match ty {
         Type::List(list) => value.element = nested(&list.ty())?,
         Type::Option(option) => value.element = nested(&option.ty())?,
+        Type::Stream(stream) => {
+            if let Some(element) = stream.ty() {
+                value.element = nested(&element)?;
+            }
+        }
+        Type::Future(future) => {
+            if let Some(element) = future.ty() {
+                value.element = nested(&element)?;
+            }
+        }
         Type::Tuple(tuple) => {
             let mut types = ZendHashTable::new();
             for ty in tuple.types() {

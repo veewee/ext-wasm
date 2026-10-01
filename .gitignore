@@ -8,6 +8,7 @@ tools/*.phar binary
 /examples/quickjs/dist/
 /examples/rust-markdown/target/
 /examples/link-preview/target/
+/examples/stream-gzip/target/
 /examples/oxipng/dist/
 /examples/html/target/
 /examples/typst/target/
@@ -19,3 +20,4 @@ tools/*.phar binary
 /tests/fixtures/component-resources/*/target/
 /tests/fixtures/component-http-handler/target/
 /tests/fixtures/component-http-handler-async/target/
+/tests/fixtures/component-async/target/
