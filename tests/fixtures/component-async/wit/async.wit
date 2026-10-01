@@ -1,0 +1,27 @@
+package docs:async-demo@0.1.0;
+
+world async-demo {
+    /// Implemented by PHP.
+    import slow: async func(n: u32) -> u32;
+
+    /// slow(n) + 1.
+    export run: async func(n: u32) -> u32;
+    /// slow(1) and slow(2) awaited together, summed.
+    export both: async func() -> u32;
+    /// 0 up to n, as a stream.
+    export count-up: async func(n: u32) -> stream<u32>;
+    /// n bytes 'a', written in chunks of 3.
+    export bytes: async func(n: u32) -> stream<u8>;
+    /// Three words.
+    export words: async func() -> stream<string>;
+    /// Bytes until the reader goes away.
+    export endless: async func() -> stream<u8>;
+    /// The sum of the numbers read.
+    export sum: async func(s: stream<u32>) -> u64;
+    /// The number of bytes read.
+    export length: async func(s: stream<u8>) -> u64;
+    /// "hello, <name>" as a future.
+    export greet-later: async func(name: string) -> future<string>;
+    /// The value of the future, with "!" appended.
+    export await-value: async func(f: future<string>) -> string;
+}

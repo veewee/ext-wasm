@@ -204,8 +204,16 @@ pub struct StoreHandle {
     /// wasm frames are then off the activation list that wasmtime's GC walks,
     /// so nothing that can run the GC may touch the store: see `busy`.
     parked: Cell<bool>,
-    request: RefCell<Option<suspend::Request>>,
-    response: RefCell<Option<suspend::Response>>,
+    /// PHP callbacks waiting calls ask for, in order. An async component
+    /// can have several import calls in flight at once.
+    requests: RefCell<std::collections::VecDeque<suspend::Request>>,
+    /// What those callbacks returned, by request id.
+    responses: RefCell<Vec<(u64, suspend::Response)>>,
+    /// The wakers of host futures waiting for a response, by request id.
+    /// wasmtime's concurrent loop only polls a host future again once its
+    /// waker fired.
+    wakers: RefCell<Vec<(u64, std::task::Waker)>>,
+    next_request: Cell<u64>,
     /// Values a parked call's callback handed back, dropped where PHP code may
     /// run: before the next callback, or once the store borrow ends.
     garbage: RefCell<Vec<Zval>>,
@@ -229,6 +237,9 @@ pub enum Active {
     None,
     Core(*mut Caller<'static, HostState>),
     Component(*mut StoreContextMut<'static, HostState>),
+    /// An async component import, which wasmtime gives no store access
+    /// outside its polls: PHP code it runs cannot use the store at all.
+    Unavailable,
 }
 
 thread_local! {
@@ -277,8 +288,10 @@ pub fn new() -> SharedStore {
         )),
         active: Cell::new(Active::None),
         parked: Cell::new(false),
-        request: RefCell::new(None),
-        response: RefCell::new(None),
+        requests: RefCell::new(std::collections::VecDeque::new()),
+        responses: RefCell::new(Vec::new()),
+        wakers: RefCell::new(Vec::new()),
+        next_request: Cell::new(0),
         garbage: RefCell::new(Vec::new()),
         pending_drops: RefCell::new(Vec::new()),
         uses_wasi: Cell::new(false),
@@ -383,6 +396,9 @@ impl StoreHandle {
                 let mut scope = RootScope::new(unsafe { &mut *caller });
                 return f(scope.as_context_mut());
             }
+            // Every PHP entry point checks `is_parked` first and throws the
+            // busy error, so this is only reached by a missing check.
+            Active::Unavailable => panic!("{BUSY}"),
         }
 
         let result = {
@@ -493,20 +509,47 @@ impl StoreHandle {
         })
     }
 
+    pub fn next_request_id(&self) -> u64 {
+        let id = self.next_request.get();
+        self.next_request.set(id.wrapping_add(1));
+        id
+    }
+
     pub fn put_request(&self, request: suspend::Request) {
-        *self.request.borrow_mut() = Some(request);
+        self.requests.borrow_mut().push_back(request);
     }
 
     pub fn take_request(&self) -> Option<suspend::Request> {
-        self.request.borrow_mut().take()
+        self.requests.borrow_mut().pop_front()
     }
 
-    pub fn put_response(&self, response: suspend::Response) {
-        *self.response.borrow_mut() = Some(response);
+    /// Leaves the response to request `id` and wakes the future waiting for it.
+    pub fn put_response(&self, id: u64, response: suspend::Response) {
+        self.responses.borrow_mut().push((id, response));
+        let waker = {
+            let mut wakers = self.wakers.borrow_mut();
+            let at = wakers.iter().position(|(waiting, _)| *waiting == id);
+            at.map(|at| wakers.swap_remove(at).1)
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 
-    pub fn take_response(&self) -> Option<suspend::Response> {
-        self.response.borrow_mut().take()
+    pub fn take_response(&self, id: u64) -> Option<suspend::Response> {
+        let mut responses = self.responses.borrow_mut();
+        let at = responses.iter().position(|(answered, _)| *answered == id)?;
+        Some(responses.swap_remove(at).1)
+    }
+
+    /// Remembers the waker of the future waiting for request `id`, replacing
+    /// the one of an earlier poll.
+    pub fn wait_for(&self, id: u64, waker: &std::task::Waker) {
+        let mut wakers = self.wakers.borrow_mut();
+        match wakers.iter_mut().find(|(waiting, _)| *waiting == id) {
+            Some((_, stored)) => stored.clone_from(waker),
+            None => wakers.push((id, waker.clone())),
+        }
     }
 
     pub fn put_garbage(&self, value: Zval) {
@@ -519,7 +562,10 @@ impl StoreHandle {
 
     /// Empties the slots after a driven call, however it ended.
     pub fn clear_slots(&self) {
-        drop((self.take_request(), self.take_response()));
+        let requests = std::mem::take(&mut *self.requests.borrow_mut());
+        let responses = std::mem::take(&mut *self.responses.borrow_mut());
+        self.wakers.borrow_mut().clear();
+        drop((requests, responses));
     }
 
     /// Collects unreferenced externrefs once enough PHP values piled up, and

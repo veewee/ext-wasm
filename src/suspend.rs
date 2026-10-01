@@ -45,6 +45,8 @@ impl Suspending {
 
 /// A PHP callback that wasm is waiting for.
 pub struct Request {
+    /// Matches the response to the call waiting for it.
+    pub id: u64,
     /// The store access of the waiting call, for PHP code the callback runs.
     pub access: Active,
     pub callee: Callee,
@@ -85,6 +87,7 @@ pub fn async_host_func(
             suspending,
             result_types: result_types.clone(),
             requested: false,
+            id: 0,
         })
     })
 }
@@ -99,6 +102,7 @@ struct HostCall<'a> {
     suspending: bool,
     result_types: Vec<ValType>,
     requested: bool,
+    id: u64,
 }
 
 impl Future for HostCall<'_> {
@@ -125,7 +129,10 @@ impl Future for HostCall<'_> {
                 }
             }
             let callable = ctx.data().values.get(this.key).shallow_clone();
+            let id = store.next_request_id();
+            this.id = id;
             store.put_request(Request {
+                id,
                 // The future is pinned inside wasmtime, so this address holds until it is dropped.
                 access: Active::Core((&mut this.caller as *mut Caller<'_, HostState>).cast()),
                 callee: Callee::Callable(callable),
@@ -136,7 +143,7 @@ impl Future for HostCall<'_> {
             return Poll::Pending;
         }
 
-        let Some(returned) = store.take_response() else {
+        let Some(returned) = store.take_response(this.id) else {
             return Poll::Ready(Err(wasmtime::Error::msg(
                 "wasm resumed a PHP callback that has not returned",
             )));
@@ -183,7 +190,7 @@ pub fn drive<R>(
             return result;
         }
         // Without a request wasmtime only yielded, for example inside its GC.
-        if let Some(request) = store.take_request() {
+        while let Some(request) = store.take_request() {
             call_parked(store, request);
         }
     }
@@ -196,6 +203,7 @@ pub fn drive<R>(
 /// point's own error is not thrown over the pending one, so PHP keeps unwinding.
 fn call_parked(store: &StoreHandle, request: Request) {
     let Request {
+        id,
         access,
         callee,
         args,
@@ -225,7 +233,7 @@ fn call_parked(store: &StoreHandle, request: Request) {
         let _no_fiber_switch = block();
         drop((args, callee));
     }
-    store.put_response(returned.map_err(|err| err.to_string()));
+    store.put_response(id, returned.map_err(|err| err.to_string()));
 }
 
 struct ClearSlots<'a>(&'a StoreHandle);

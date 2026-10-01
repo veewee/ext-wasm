@@ -6,9 +6,10 @@ use ext_php_rs::exception::PhpResult;
 use ext_php_rs::types::{ZendCallable, ZendHashTable, ZendObject, Zval};
 use ext_php_rs::zend::ClassEntry;
 use ext_php_rs::zend::ExecutorGlobals;
+use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::types::{ComponentFunc, ComponentItem, Type};
-use wasmtime::component::{Linker, LinkerInstance, Val};
+use wasmtime::component::{Accessor, Linker, LinkerInstance, Val};
 
 use crate::callback::FiberSwitchBlock;
 use crate::component::Component;
@@ -387,6 +388,21 @@ fn define(
             "import \"{path}\" uses {unsupported}, which is not supported yet"
         )));
     }
+    if ty.async_() {
+        // An `async func` import must be concurrent, which wasmtime checks.
+        return target
+            .func_new_concurrent(name, move |accessor, ty, params, results| {
+                Box::pin(ConcurrentHostCall {
+                    accessor,
+                    ty,
+                    params,
+                    results,
+                    what: what.clone(),
+                    id: None,
+                })
+            })
+            .map_err(link_error);
+    }
     if is_async {
         // PHP code cannot run on wasmtime's async stack, so the call is handed
         // to the poll loop on the PHP stack, as for core Suspending imports.
@@ -398,7 +414,7 @@ fn define(
                     params,
                     results,
                     what: what.clone(),
-                    requested: false,
+                    id: None,
                 })
             })
             .map_err(link_error);
@@ -552,7 +568,8 @@ struct ComponentHostCall<'a> {
     params: &'a [Val],
     results: &'a mut [Val],
     what: Target,
-    requested: bool,
+    /// The request this call made, once it made it.
+    id: Option<u64>,
 }
 
 impl std::future::Future for ComponentHostCall<'_> {
@@ -560,19 +577,21 @@ impl std::future::Future for ComponentHostCall<'_> {
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         use std::task::Poll;
 
         let this = self.get_mut();
         let store = store::of(&this.ctx);
-        if !this.requested {
+        let Some(id) = this.id else {
             let callable = callable_of(&this.ctx, &this.what);
             let args = match lift(&mut this.ctx, &store, &this.ty, this.params) {
                 Ok(args) => args,
                 Err(err) => return Poll::Ready(Err(err)),
             };
+            let id = store.next_request_id();
             store.put_request(Request {
+                id,
                 // The future is pinned inside wasmtime, so this address holds until it is dropped.
                 access: Active::Component(
                     (&mut this.ctx as *mut StoreContextMut<'_, HostState>).cast(),
@@ -581,19 +600,78 @@ impl std::future::Future for ComponentHostCall<'_> {
                 callee: Callee::Component(this.what.clone(), callable),
                 args,
             });
-            this.requested = true;
+            store.wait_for(id, cx.waker());
+            this.id = Some(id);
             return Poll::Pending;
-        }
-        let Some(returned) = store.take_response() else {
-            return Poll::Ready(Err(wasmtime::Error::msg(
-                "the component resumed a PHP call that has not returned",
-            )));
+        };
+        // wasmtime's concurrent loop may poll before the response is there.
+        let Some(returned) = store.take_response(id) else {
+            store.wait_for(id, cx.waker());
+            return Poll::Pending;
         };
         let (outcome, leftovers) = settle(&mut this.ctx, returned, &this.ty, this.results);
         for value in leftovers {
             store.put_garbage(value);
         }
         Poll::Ready(outcome)
+    }
+}
+
+/// A call of an `async func` import. wasmtime runs it on its concurrent
+/// loop and gives store access only through `accessor` while it polls, so
+/// the values are converted inside each poll, and the PHP callback runs
+/// with no store access at all.
+struct ConcurrentHostCall<'a> {
+    accessor: &'a Accessor<HostState>,
+    ty: ComponentFunc,
+    params: &'a [Val],
+    results: &'a mut [Val],
+    what: Target,
+    id: Option<u64>,
+}
+
+impl std::future::Future for ConcurrentHostCall<'_> {
+    type Output = wasmtime::Result<()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        use std::task::Poll;
+
+        let this = self.get_mut();
+        let accessor = this.accessor;
+        accessor.with(|mut access| {
+            let mut ctx = access.as_context_mut();
+            let store = store::of(&ctx);
+            let Some(id) = this.id else {
+                let callable = callable_of(&ctx, &this.what);
+                let args = match lift(&mut ctx, &store, &this.ty, this.params) {
+                    Ok(args) => args,
+                    Err(err) => return Poll::Ready(Err(err)),
+                };
+                let id = store.next_request_id();
+                store.put_request(Request {
+                    id,
+                    access: Active::Unavailable,
+                    suspending: matches!(this.what, Target::Callable(_, true)),
+                    callee: Callee::Component(this.what.clone(), callable),
+                    args,
+                });
+                store.wait_for(id, cx.waker());
+                this.id = Some(id);
+                return Poll::Pending;
+            };
+            let Some(returned) = store.take_response(id) else {
+                store.wait_for(id, cx.waker());
+                return Poll::Pending;
+            };
+            let (outcome, leftovers) = settle(&mut ctx, returned, &this.ty, this.results);
+            for value in leftovers {
+                store.put_garbage(value);
+            }
+            Poll::Ready(outcome)
+        })
     }
 }
 

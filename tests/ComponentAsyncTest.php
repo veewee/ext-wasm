@@ -6,7 +6,10 @@ namespace Test;
 
 use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
+use Wasm\Component\Exports;
 use Wasm\Component\Instance;
+use Wasm\Suspending;
+use Wasm\Wasi;
 
 /**
  * The async component model: `async func` exports and imports, streams and
@@ -30,6 +33,58 @@ final class ComponentAsyncTest extends TestCase
             (export "task-return" (func $task-return))))))
           (func (export "run") async (result u32) (canon lift (core func $i "run") async (callback (core func $i "cb")))))
         WAT;
+
+    /** tests/fixtures/component-async, with `slow` implemented by $slow. */
+    private static function demo(callable|Suspending $slow): Exports
+    {
+        return (new Instance(
+            Component::fromFile(__DIR__ . '/fixtures/component-async/component-async.wasm'),
+            ['slow' => $slow],
+            new Wasi(),
+        ))->exports;
+    }
+
+    public function test_an_async_import_is_a_php_callable(): void
+    {
+        self::assertSame(41, self::demo(fn (int $n): int => $n * 10)->run(4));
+    }
+
+    public function test_two_async_import_calls_can_be_in_flight_at_once(): void
+    {
+        $calls = [];
+        $exports = self::demo(function (int $n) use (&$calls): int {
+            $calls[] = $n;
+
+            return $n * 10;
+        });
+
+        self::assertSame(30, $exports->both());
+        self::assertSame([1, 2], $calls);
+    }
+
+    public function test_a_suspending_async_import_suspends_its_fiber(): void
+    {
+        $exports = self::demo(new Suspending(fn (int $n): int => \Fiber::suspend($n) * 10));
+
+        $fiber = new \Fiber(fn (): int => $exports->run(4));
+        self::assertSame(4, $fiber->start());
+        $fiber->resume(5);
+
+        self::assertSame(51, $fiber->getReturn());
+    }
+
+    public function test_two_suspending_calls_in_flight_resume_one_after_the_other(): void
+    {
+        $exports = self::demo(new Suspending(fn (int $n): int => \Fiber::suspend($n)));
+
+        $fiber = new \Fiber(fn (): int => $exports->both());
+        $first = $fiber->start();
+        $second = $fiber->resume(100);
+        $fiber->resume(200);
+
+        self::assertSame([1, 2], [$first, $second]);
+        self::assertSame(300, $fiber->getReturn());
+    }
 
     public function test_an_async_export_with_a_plain_import_returns_its_result(): void
     {
