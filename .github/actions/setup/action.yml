@@ -7,6 +7,9 @@ inputs:
   ts:
     required: false
     default: 'nts'
+  extensions:
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -17,6 +20,7 @@ runs:
         phpts: ${{ inputs.ts }}
       with:
         php-version: ${{ inputs.php }}
+        extensions: ${{ inputs.extensions }}
         coverage: none
 
     # ext-php-rs needs the unstable vectorcall ABI on Windows.

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Test;
 
+require_once __DIR__ . '/RunsPhpInSubprocess.php';
+
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
 use Wasm\Exception\LinkError;
@@ -16,6 +19,8 @@ use Wasm\Module;
  */
 final class LimitsTest extends TestCase
 {
+    use RunsPhpInSubprocess;
+
     private const GROW = <<<'WAT'
         (module
           (memory (export "memory") 1)
@@ -165,5 +170,32 @@ final class LimitsTest extends TestCase
         self::assertNotFalse(ini_set('wasm.memory_limit', '-1'));
         self::assertNotFalse(ini_set('wasm.memory_limit', '64M'));
         self::assertSame('64M', ini_get('wasm.memory_limit'));
+    }
+
+    /**
+     * On ZTS, PHP hands every new thread the settings from startup by calling
+     * each setting's handler again in that thread (zend_new_thread_end_handler).
+     */
+    #[RequiresPhpExtension('parallel')]
+    public function test_the_limit_applies_in_other_php_threads(): void
+    {
+        $code = <<<'PHP'
+            <?php
+            $future = (new parallel\Runtime())->run(static function (): string {
+                try {
+                    new Wasm\Memory(['initial' => 32]);
+
+                    return 'created';
+                } catch (Throwable $e) {
+                    return ini_get('wasm.memory_limit') . ' ' . get_class($e) . ': ' . $e->getMessage();
+                }
+            });
+            echo $future->value();
+            PHP;
+
+        $output = $this->runPhp($code, settings: ['extension' => 'parallel', 'wasm.memory_limit' => '1M']);
+
+        self::assertStringStartsWith('1M ', $output);
+        self::assertStringContainsString('wasm.memory_limit', $output);
     }
 }

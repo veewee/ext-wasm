@@ -21,7 +21,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         ts: [nts]
         include:
-          - { php: '8.4', os: ubuntu-latest, ts: zts }
+          # parallel runs code in other PHP threads, which only ZTS has.
+          - { php: '8.4', os: ubuntu-latest, ts: zts, extensions: parallel }
 
     defaults:
       run:
@@ -34,6 +35,7 @@ jobs:
         with:
           php: ${{ matrix.php }}
           ts: ${{ matrix.ts }}
+          extensions: ${{ matrix.extensions }}
 
       - name: Build
         run: cargo build --release --locked
