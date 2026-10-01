@@ -134,6 +134,7 @@ jobs:
       - name: Build and run the key-value server example
         run: |
           examples/kv-server/build.sh
+          cargo test --manifest-path examples/kv-server/Cargo.toml
           trap 'kill $(jobs -p)' EXIT
           php -d "extension=$PWD/target/release/libwasm.so" examples/kv-server/server.php 16380 > /dev/null 2>&1 &
           for _ in $(seq 20); do

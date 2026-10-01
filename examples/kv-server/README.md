@@ -26,13 +26,13 @@ It knows PING, ECHO, SET with an optional EX in seconds, GET, DEL, EXISTS, INCR,
 
 ## Requests and replies
 
-The component asks for the next input chunk only when it has answered what it has. Reading the returned stream gives PHP the reply before the generator is asked for more input, so the generator's blocking `fread` never holds up a reply the client is waiting for. A request and its reply take turns this way without any extra code in PHP.
+The component asks for the next input chunk only after PHP has taken the replies to the commands it has, or straight away when a command is still incomplete. Reading the returned stream gives PHP the reply before the generator is asked for more input, so the generator's blocking `fread` never holds up a reply the client is waiting for. A request and its reply take turns this way without any extra code in PHP.
 
 ## One connection at a time
 
-`server.php` serves one connection at a time, because PHP runs on one thread and `serve` returns only when the client sent QUIT or closed the connection. A second client can connect meanwhile, and waits in the listen queue until the first one is done. That suits a demo and a local tool, not many clients at once.
+`server.php` serves one connection at a time, because PHP runs on one thread and `KvServer::serve` returns only when the client sent QUIT or closed the connection: it reads the reply stream until it ends. A second client can connect meanwhile, and waits in the listen queue until the first one is done. That suits a demo and a local tool, not many clients at once.
 
-The component gets no listening socket of its own: the extension refuses listening in `wasi:sockets` (see `tcpHosts` in the [main README](../../README.md)). A component that listened itself would block the PHP thread while it waits for clients, and PHP-FPM workers would compete for the same port. With PHP holding the sockets, the component only sees bytes in and bytes out, and needs no network permissions at all.
+The component gets no listening socket of its own: the extension refuses listening in `wasi:sockets` (see `tcpHosts` in the [main README](../../README.md)). A component that listened itself would block the PHP thread while it waits for clients, and under PHP-FPM every worker would try to listen on the same port. With PHP holding the sockets, the component only sees bytes in and bytes out, and needs no network permissions at all.
 
 ## Running it
 

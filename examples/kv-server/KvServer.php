@@ -7,7 +7,7 @@ use Wasm\Component\Exports;
 use Wasm\Component\Instance;
 
 /**
- * A Redis compatible key-value server by the async Rust component in src/lib.rs.
+ * A Redis compatible key-value server, implemented by the async Rust component in src/lib.rs.
  *
  * wit/kv.wit declares serve(input: stream<u8>) -> stream<u8>: PHP passes what
  * the client sends and writes back what the component replies. The sockets
@@ -31,6 +31,8 @@ final class KvServer
      */
     public function serve($client): void
     {
+        // Without this, fread gives up after default_socket_timeout and an idle client is dropped.
+        stream_set_timeout($client, -1);
         foreach ($this->connection->serve(self::read($client)) as $reply) {
             if (@fwrite($client, $reply) === false) {
                 return;

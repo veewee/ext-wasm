@@ -264,17 +264,32 @@ fn incr(db: &mut HashMap<Vec<u8>, Entry>, key: &[u8], out: &mut Vec<u8>) {
     integer(out, next);
 }
 
-/// Redis style glob with `*` and `?`.
+/// Redis style glob with `*` and `?`. On a mismatch it only retries from
+/// the last `*`, so a pattern full of stars cannot stall the server.
 fn glob(pattern: &[u8], text: &[u8]) -> bool {
-    match (pattern.first(), text.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => {
-            glob(&pattern[1..], text) || (!text.is_empty() && glob(pattern, &text[1..]))
+    let (mut p, mut t) = (0, 0);
+    let mut star = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == b'?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    star = Some((star_p, star_t + 1));
+                    p = star_p + 1;
+                    t = star_t + 1;
+                }
+                None => return false,
+            },
         }
-        (Some(b'?'), Some(_)) => glob(&pattern[1..], &text[1..]),
-        (Some(p), Some(t)) if p == t => glob(&pattern[1..], &text[1..]),
-        _ => false,
     }
+    pattern[p..].iter().all(|&c| c == b'*')
 }
 
 fn simple(out: &mut Vec<u8>, text: &str) {
@@ -334,5 +349,11 @@ mod tests {
         assert!(glob(b"user:*", b"user:42"));
         assert!(glob(b"?a*", b"bar"));
         assert!(!glob(b"user:?", b"user:42"));
+        assert!(glob(b"*", b""));
+        assert!(!glob(b"a*b", b"acbd"));
+        assert!(!glob(
+            &[b'*'; 40].iter().chain(b"b").copied().collect::<Vec<_>>(),
+            &[b'a'; 40]
+        ));
     }
 }
