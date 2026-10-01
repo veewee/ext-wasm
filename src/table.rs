@@ -1,3 +1,4 @@
+use crate::limits::limited;
 use ext_php_rs::exception::PhpResult;
 use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
@@ -53,7 +54,8 @@ impl Table {
         let store = store::choose(store, from, store::standalone)?;
         let inner = store.with(|mut ctx| {
             let init = to_ref(&mut ctx, value.unwrap_or(&null), &element)?;
-            wasmtime::Table::new(&mut ctx, ty, init).map_err(|err| value_error(format!("{err:#}")))
+            limited(&mut ctx, |ctx| wasmtime::Table::new(ctx, ty, init))
+                .map_err(|err| value_error(format!("{err:#}")))
         })?;
         Ok(Self { store, inner })
     }
@@ -88,8 +90,7 @@ impl Table {
         self.store.with(|mut ctx| {
             let element = self.inner.ty(&ctx).element().clone();
             let init = to_ref(&mut ctx, value.unwrap_or(&null), &element)?;
-            self.inner
-                .grow(&mut ctx, delta, init)
+            limited(&mut ctx, |ctx| self.inner.grow(ctx, delta, init))
                 .map(|previous| previous as i64)
                 .map_err(|err| value_error(format!("{err:#}")))
         })
