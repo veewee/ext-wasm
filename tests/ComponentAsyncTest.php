@@ -423,6 +423,65 @@ final class ComponentAsyncTest extends TestCase
         self::assertTrue($released);
     }
 
+    public function test_a_sync_export_takes_an_array_as_a_stream(): void
+    {
+        self::assertSame(6, self::demo(fn (int $n): int => $n)->syncSum([1, 2, 3]));
+    }
+
+    public function test_a_generator_for_a_sync_export_says_to_pass_an_array(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage(
+            'cannot block a synchronous task before returning: a sync export cannot wait for the PHP iterator feeding its stream; pass an array, or make the export an async func',
+        );
+        $exports->syncSum((function () {
+            yield 1;
+        })());
+    }
+
+    public function test_an_advanced_generator_is_rewound_like_foreach_does(): void
+    {
+        $numbers = (function () {
+            yield 1;
+            yield 2;
+        })();
+        $numbers->next();
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Cannot rewind a generator that was already run');
+        self::demo(fn (int $n): int => $n)->sum($numbers);
+    }
+
+    public function test_a_no_rewind_iterator_streams_the_rest_of_a_generator(): void
+    {
+        $numbers = (function () {
+            yield 1;
+            yield 2;
+            yield 3;
+        })();
+        $numbers->next();
+
+        self::assertSame(5, self::demo(fn (int $n): int => $n)->sum(new \NoRewindIterator($numbers)));
+    }
+
+    public function test_a_generator_the_component_dropped_is_not_advanced_by_a_later_call(): void
+    {
+        $exports = self::demo(fn (int $n): int => $n);
+        $started = false;
+        $numbers = (function () use (&$started) {
+            $started = true;
+            yield 7;
+        })();
+        $kept = \WeakReference::create($numbers);
+
+        self::assertSame(5, $exports->race($numbers, [5]));
+        unset($numbers);
+        self::assertNull($kept->get());
+        self::assertFalse($started);
+    }
+
     public function test_a_stream_or_future_of_the_component_cannot_be_passed_back(): void
     {
         $exports = self::demo(fn (int $n): int => $n);

@@ -25,7 +25,7 @@ use wasmtime::{AsContextMut, StoreContextMut};
 use crate::component::value::scalar;
 use crate::error::runtime_error;
 use crate::store::{self, Active, HostState, SharedStore, Unread, ValueKey};
-use crate::suspend::{Callee, Request};
+use crate::suspend::{Callee, FeedRequest, Request};
 use crate::throw::call_error;
 use crate::value::{ConvertError, debug_type, downcast};
 
@@ -650,7 +650,7 @@ where
     fn poll_produce<'a>(
         self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
-        store: StoreContextMut<'a, HostState>,
+        mut store: StoreContextMut<'a, HostState>,
         mut destination: Destination<'a, T, VecBuffer<T>>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
@@ -682,15 +682,27 @@ where
             let Some(key) = &this.iterator else {
                 return Poll::Pending;
             };
+            store.data_mut().feed_waits += 1;
             let iterator = store.data().values.get(key.key()).shallow_clone();
-            let shared = this.shared.clone();
+            // Weak, so the request does not keep the producer's state alive
+            // after wasmtime dropped the producer with the stream.
+            let shared = Arc::downgrade(&this.shared);
+            let producer: std::sync::Weak<dyn std::any::Any> = shared.clone();
             let element = this.element.clone();
             let handle = store::of(&store);
             let id = handle.next_request_id();
             handle.put_request(Request {
                 id,
                 access: Active::Unavailable,
-                callee: Callee::Feed(Box::new(move || advance(&iterator, &shared, &element))),
+                callee: Callee::Feed(FeedRequest {
+                    iterator,
+                    producer,
+                    advance: Box::new(move |iterator| {
+                        if let Some(shared) = shared.upgrade() {
+                            advance(iterator, &shared, &element);
+                        }
+                    }),
+                }),
                 args: Vec::new(),
                 suspending: false,
             });

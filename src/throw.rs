@@ -251,5 +251,5 @@ pub fn call_error(ctx: &mut StoreContextMut<'_, HostState>, err: wasmtime::Error
         .is::<wasmtime::Trap>()
         .then(|| crate::coredump::write(ctx, &err))
         .flatten();
-    crate::error::trap_error(err, note)
+    crate::error::trap_error(err, None, note)
 }

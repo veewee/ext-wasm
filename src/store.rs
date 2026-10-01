@@ -38,6 +38,9 @@ pub struct HostState {
     pub sync_callbacks: bool,
     /// The memory of this store, counted against wasm.memory_limit.
     pub memory: crate::limits::MemoryBudget,
+    /// How often a stream fed by a PHP iterator had to wait for PHP to
+    /// advance it, which a sync export cannot do.
+    pub feed_waits: u64,
 }
 
 // SAFETY: wasmtime-wasi and wasmtime's async functions require Send store
@@ -640,7 +643,30 @@ impl StoreHandle {
         store.data_mut().values.reclaim();
         let mut released = std::mem::take(&mut store.data_mut().values.released);
         released.append(&mut self.take_garbage());
+        released.extend(self.take_orphaned_feeds());
         released
+    }
+
+    /// Takes the feed requests whose stream the component dropped before
+    /// PHP advanced the iterator, and hands back their iterators. A sync
+    /// call never drains requests, and a driven call may end with them
+    /// queued, so they would otherwise keep the iterator alive. A sync call
+    /// that trapped may leave a request whose producer lives on; it stays
+    /// until the store goes, which is harmless since the instance cannot be
+    /// entered again.
+    fn take_orphaned_feeds(&self) -> Vec<Zval> {
+        let mut requests = self.requests.borrow_mut();
+        let (orphaned, kept) = std::mem::take(&mut *requests).into_iter().partition(
+            |request| matches!(&request.callee, suspend::Callee::Feed(feed) if feed.orphaned()),
+        );
+        *requests = kept;
+        orphaned
+            .into_iter()
+            .filter_map(|request| match request.callee {
+                suspend::Callee::Feed(feed) => Some(feed.iterator),
+                _ => None,
+            })
+            .collect()
     }
 }
 

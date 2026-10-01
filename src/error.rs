@@ -135,12 +135,17 @@ pub fn instantiation_error(err: wasmtime::Error) -> PhpException {
 /// Formats a trap as "cause" followed by the wasm backtrace, instead of
 /// wasmtime's default "error while executing at wasm backtrace: ... cause".
 pub fn runtime_error(err: wasmtime::Error) -> PhpException {
-    trap_error(err, None)
+    trap_error(err, None, None)
 }
 
-/// A `RuntimeError` for a trap, with `note` as its last line.
-pub fn trap_error(err: wasmtime::Error, note: Option<String>) -> PhpException {
+/// A `RuntimeError` for a trap: `hint` follows the cause, `note` is the
+/// last line.
+pub fn trap_error(err: wasmtime::Error, hint: Option<&str>, note: Option<String>) -> PhpException {
     let mut message = err.root_cause().to_string();
+    if let Some(hint) = hint {
+        message.push_str(": ");
+        message.push_str(hint);
+    }
     if let Some(backtrace) = err.downcast_ref::<wasmtime::WasmBacktrace>() {
         message.push_str(&format!("\n{backtrace}"));
     }

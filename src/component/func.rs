@@ -7,9 +7,16 @@ use wasmtime::component::Val;
 use crate::component::host_resource;
 use crate::component::resource;
 use crate::component::value::{to_val, unwrap_result};
-use crate::error::argument_count_error;
+use crate::error::{argument_count_error, trap_error};
 use crate::store::SharedStore;
 use crate::throw::call_error;
+
+/// Why a sync export trapped on a stream fed by a PHP iterator: PHP advances
+/// the iterator only between polls of the event loop, so the first read of
+/// it waits, and the component model forbids a sync task to wait. The call
+/// only knows that a lazy feed waited during it, so a sync export that
+/// trapped for another reason in the same call gets this hint too.
+const SYNC_FEED: &str = "a sync export cannot wait for the PHP iterator feeding its stream; pass an array, or make the export an async func";
 
 /// An exported component function, callable from PHP.
 #[php_class]
@@ -72,6 +79,7 @@ impl Func {
                     args.len()
                 )));
             }
+            let feed_waits = ctx.data().feed_waits;
             let lent = host_resource::mark(&ctx);
             let moves = resource::moves_mark(&ctx);
             let converted = args
@@ -85,7 +93,20 @@ impl Func {
                     let mut results = vec![Val::Bool(false); ty.results().len()];
                     run(&self.store, &mut ctx, self.inner, &params, &mut results)
                         .map(|()| results)
-                        .map_err(|err| call_error(&mut ctx, err))
+                        .map_err(|err| {
+                            if !ty.async_()
+                                && ctx.data().feed_waits != feed_waits
+                                && err.downcast_ref::<wasmtime::Trap>()
+                                    == Some(&wasmtime::Trap::CannotBlockSyncTask)
+                            {
+                                {
+                                    let note = crate::coredump::write(&mut ctx, &err);
+                                    trap_error(err, Some(SYNC_FEED), note)
+                                }
+                            } else {
+                                call_error(&mut ctx, err)
+                            }
+                        })
                 }
                 Err(err) => Err(err.into()),
             };

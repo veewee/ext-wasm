@@ -133,6 +133,28 @@ impl Guest for Component {
         total
     }
 
+    fn sync_sum(mut s: wit_bindgen::StreamReader<u32>) -> u64 {
+        wit_bindgen::block_on(async move {
+            let mut total = 0u64;
+            while let Some(n) = s.next().await {
+                total += u64::from(n);
+            }
+            total
+        })
+    }
+
+    async fn race(
+        mut a: wit_bindgen::StreamReader<u32>,
+        mut b: wit_bindgen::StreamReader<u32>,
+    ) -> u32 {
+        let first = futures::future::select(Box::pin(a.next()), Box::pin(b.next())).await;
+        match first {
+            futures::future::Either::Left((n, _)) | futures::future::Either::Right((n, _)) => {
+                n.unwrap_or(0)
+            }
+        }
+    }
+
     async fn length(s: wit_bindgen::StreamReader<u8>) -> u64 {
         s.collect().await.len() as u64
     }
