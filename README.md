@@ -392,7 +392,7 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ### Coredumps
 
-With `wasm.coredump_dir` set to an absolute directory, every trap also writes a wasm coredump there: the stack at the trap, and the globals and linear memories of the store, in the [coredump format of the WebAssembly tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/Coredump.md). The last line of the `RuntimeError` message names the file, or says why it could not be written:
+With `wasm.coredump_dir` set to an absolute directory, every trap raised while wasm code runs also writes a wasm coredump there: the stack at the trap, and the globals and linear memories of the store, in the [coredump format of the WebAssembly tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/Coredump.md). The last line of the `RuntimeError` message names the file, or says why it could not be written:
 
 ```ini
 wasm.coredump_dir = /var/log/php/wasm
@@ -405,9 +405,9 @@ error while executing at wasm backtrace:
 coredump: /var/log/php/wasm/wasm-4242-1790000000000-0.coredump
 ```
 
-The setting is off by default and can only be set in php.ini or with `-d`, like the cache settings. Under PHP-FPM with opcache preloading, set it in php.ini rather than per pool, because the engine may be created in the master process. Only traps write a dump: an exception from a PHP import, a wasm exception or a WASI exit does not.
+The setting is off by default. Like the cache settings, it can be set in php.ini or with `-d` but not with `ini_set()`. Each process decides once, when it creates its engine, whether traps capture a dump at all. Opcache preloading runs once at server startup for all PHP-FPM pools, so when the preload script uses wasm, a value set per pool comes too late; set it in php.ini then. Only traps write a dump: an exception from a PHP import, a wasm exception or a WASI exit does not, and neither does a trap that stops a call before any wasm runs, such as calling a component instance that already trapped.
 
-A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included. Files are created readable by the PHP user only on Unix; on Windows they take the directory's permissions. The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`, so a guest with gigabytes of memory needs as much again on the heap at each trap. Turn it on to debug, not as a default in production.
+A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included. On Unix the files are created readable by the PHP user only. On Windows the extension sets no permissions of its own, so a file gets whatever the directory gives new files. The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`, and at each trap it can take up to twice the non-zero part of the guest's memory on the heap. Turn it on to debug, not as a default in production.
 
 ## Examples
 

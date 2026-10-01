@@ -38,7 +38,7 @@ pub fn write(ctx: &mut StoreContextMut<'_, HostState>, err: &wasmtime::Error) ->
     let bytes = dump.serialize(&mut *ctx, "php");
     Some(match save(Path::new(&directory), &bytes) {
         Ok(path) => format!("coredump: {}", path.display()),
-        Err(err) => format!("coredump not written: {err}"),
+        Err(err) => format!("coredump not written to {directory}: {err}"),
     })
 }
 
@@ -57,6 +57,12 @@ fn save(directory: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
     // A dump holds the whole linear memory, which may contain secrets.
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(&path)?.write_all(bytes)?;
+    let mut file = options.open(&path)?;
+    if let Err(err) = file.write_all(bytes) {
+        // A full disk would otherwise keep a truncated dump for every trap.
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(err);
+    }
     Ok(path)
 }

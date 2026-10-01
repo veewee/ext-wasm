@@ -169,7 +169,7 @@ final class CoredumpTest extends TestCase
         $output = $this->runWith($this->crashModule(), $this->directory . '/missing');
 
         self::assertStringStartsWith("Wasm\\Exception\\RuntimeError: wasm trap: wasm `unreachable` instruction executed\n", $output);
-        self::assertMatchesRegularExpression('/\ncoredump not written: .+$/', $output);
+        self::assertStringContainsString("\ncoredump not written to {$this->directory}/missing: ", $output);
     }
 
     public function test_a_relative_directory_is_refused(): void
