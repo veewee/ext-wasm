@@ -183,6 +183,42 @@ final class ReferenceTypesTest extends TestCase
         self::assertSame(7, $exports->call($exports->seven));
     }
 
+    public function test_a_supertype_does_not_fit_its_subtype(): void
+    {
+        $exports = $this->exports(<<<'EOWAT'
+            (type $base (sub (func (result i32))))
+            (type $derived (sub $base (func (result i32))))
+            (func (export "plain") (type $base) (i32.const 7))
+            (func (export "call") (param (ref $derived)) (result i32) (call_ref $derived (local.get 0)))
+            EOWAT);
+
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('not a subtype');
+
+        $exports->call($exports->plain);
+    }
+
+    public function test_a_func_of_another_store_is_a_link_error(): void
+    {
+        $exports = $this->exports(self::TYPED);
+        $other = $this->exports(self::TYPED);
+
+        $this->expectException(\Wasm\Exception\LinkError::class);
+        $this->expectExceptionMessage('different store');
+
+        $exports->apply($other->double, 1);
+    }
+
+    public function test_a_value_that_is_no_func_names_the_function_type(): void
+    {
+        $exports = $this->exports(self::TYPED);
+
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('expected a Wasm\Func of type (i32) -> (i32) or null, got int');
+
+        $exports->apply(5, 1);
+    }
+
     public function test_the_same_type_from_another_module_fits(): void
     {
         $store = new \Wasm\Store();
@@ -206,7 +242,7 @@ final class ReferenceTypesTest extends TestCase
             EOWAT);
 
         $this->expectException(\TypeError::class);
-        $this->expectExceptionMessage('expected a Wasm\Func of type () -> (i32)');
+        $this->expectExceptionMessage('expected a Wasm\Func of type () -> (i32), got one of type () -> (i32), declared as another type that is not a subtype');
 
         $exports->call($exports->lookalike);
     }
@@ -230,6 +266,7 @@ final class ReferenceTypesTest extends TestCase
 
         self::assertSame(10, $exports->run(0));
 
+        $this->expectException(\Wasm\Exception\RuntimeError::class);
         $this->expectExceptionMessage('expected a Wasm\Func of type () -> (i32), got one of type (i32) -> (i32)');
         $exports->run(1);
     }

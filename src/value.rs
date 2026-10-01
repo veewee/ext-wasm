@@ -143,17 +143,26 @@ pub fn to_ref(
                 if HeapType::ConcreteFunc(actual.clone()).matches(ty.heap_type()) {
                     Ok(Ref::Func(Some(func.inner)))
                 } else {
-                    Err(ConvertError::Type(format!(
-                        "expected a Wasm\\Func of type {}, got one of type {}",
+                    let (wanted, given) = (
                         crate::types::signature(expected),
-                        crate::types::signature(&actual)
+                        crate::types::signature(&actual),
+                    );
+                    // Two types can read the same and still not match by declaration.
+                    let why = if wanted == given {
+                        ", declared as another type that is not a subtype"
+                    } else {
+                        ""
+                    };
+                    Err(ConvertError::Type(format!(
+                        "expected a Wasm\\Func of type {wanted}, got one of type {given}{why}"
                     )))
                 }
             }
             Some(_) => Err(ConvertError::Link(store::mismatch_message("Func"))),
             None => Err(ConvertError::Type(format!(
-                "expected Wasm\\Func for {}, got {}",
-                crate::types::ref_type_name(ty),
+                "expected a Wasm\\Func of type {}{}, got {}",
+                crate::types::signature(expected),
+                if ty.is_nullable() { " or null" } else { "" },
                 debug_type(value)
             ))),
         },
