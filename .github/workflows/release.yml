@@ -6,10 +6,22 @@ name: release
 # holding a DLL of the same name.
 # Tag releases with a plain version (0.2.0), since the tag becomes {version}.
 # The release starts as a draft, and PIE only sees it once it is published.
+#
+# Run it by hand with a tag to build that tag again with this workflow, for
+# example after a build failed, without moving the tag: it builds the tag's
+# code and replaces the assets of the existing release.
 
 on:
   push:
     tags: ['*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build, such as 0.1.0'
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -19,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --draft
+      - run: gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --draft --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -50,8 +62,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
 
-      - uses: ./.github/actions/setup
+      # The setup action of this workflow's commit, not of the tag, so a rebuild
+      # gets fixes to the build environment.
+      - uses: actions/checkout@v5
+        with:
+          path: .ci
+          sparse-checkout: .github/actions
+
+      - uses: ./.ci/.github/actions/setup
         with:
           php: ${{ matrix.php }}
           ts: ${{ matrix.ts }}
@@ -71,11 +92,11 @@ jobs:
         run: |
           suffix=""
           [ "${{ matrix.ts }}" = "zts" ] && suffix="-zts"
-          asset="php_wasm-${GITHUB_REF_NAME}_php${{ matrix.php }}-${{ matrix.target.arch }}-${{ matrix.target.os }}-${{ matrix.target.libc }}${suffix}.zip"
+          asset="php_wasm-${TAG}_php${{ matrix.php }}-${{ matrix.target.arch }}-${{ matrix.target.os }}-${{ matrix.target.libc }}${suffix}.zip"
           mkdir -p package
           cp "target/release/${{ matrix.target.library }}" package/wasm.so
           (cd package && zip "../$asset" wasm.so)
-          gh release upload "$GITHUB_REF_NAME" "$asset"
+          gh release upload "$TAG" "$asset" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -86,10 +107,10 @@ jobs:
         run: |
           compiler=$(php -i | tr -d '\r' | sed -n 's/^PHP Extension Build => //p' | tr ',' '\n' | grep -E '^V[CS][0-9]+$' | tr '[:upper:]' '[:lower:]')
           [ -n "$compiler" ] || { echo "::error::no compiler in php -i"; exit 1; }
-          name="php_wasm-${GITHUB_REF_NAME}-${{ matrix.php }}-${{ matrix.ts }}-${compiler}-${{ matrix.target.arch }}"
+          name="php_wasm-${TAG}-${{ matrix.php }}-${{ matrix.ts }}-${compiler}-${{ matrix.target.arch }}"
           mkdir -p package
           cp "target/release/${{ matrix.target.library }}" "package/$name.dll"
           (cd package && 7z a "../$name.zip" "$name.dll")
-          gh release upload "$GITHUB_REF_NAME" "$name.zip"
+          gh release upload "$TAG" "$name.zip" --clobber
         env:
           GH_TOKEN: ${{ github.token }}

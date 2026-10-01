@@ -23,6 +23,8 @@ jobs:
         include:
           # parallel runs code in other PHP threads, which only ZTS has.
           - { php: '8.4', os: ubuntu-latest, ts: zts, extensions: parallel }
+          # The release builds Linux x86_64 binaries on this older image, for glibc 2.35.
+          - { php: '8.4', os: ubuntu-22.04, ts: nts }
 
     defaults:
       run:

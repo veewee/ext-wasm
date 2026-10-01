@@ -34,6 +34,20 @@ runs:
       with:
         key: php${{ inputs.php }}-${{ inputs.ts }}
 
+    # Runner images can carry several LLVM versions. bindgen takes the header
+    # paths from the default clang, so its libclang has to be the same
+    # version: a newer one does not know the builtins of older intrinsics
+    # headers and fails on emmintrin.h (seen on ubuntu-22.04 x86_64).
+    - name: Use the libclang of the default clang for bindgen
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        version=$(clang -dumpversion | cut -d. -f1)
+        dir=/usr/lib/llvm-$version/lib
+        ls "$dir"/libclang*.so* > /dev/null 2>&1 || { echo "::error::no libclang in $dir"; exit 1; }
+        echo "clang $(clang -dumpversion), LIBCLANG_PATH=$dir"
+        echo "LIBCLANG_PATH=$dir" >> "$GITHUB_ENV"
+
     - name: Use Xcode's libclang for bindgen
       if: runner.os == 'macOS'
       shell: bash
