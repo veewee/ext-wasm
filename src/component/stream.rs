@@ -15,17 +15,18 @@ use ext_php_rs::flags::ClassFlags;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use ext_php_rs::zend::ce;
-use wasmtime::StoreContextMut;
 use wasmtime::component::types::Type;
 use wasmtime::component::{
     Destination, FutureAny, FutureConsumer, FutureReader, Source, StreamAny, StreamConsumer,
     StreamProducer, StreamReader, StreamResult, Val, VecBuffer,
 };
+use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::component::value::scalar;
 use crate::error::runtime_error;
 use crate::store::{self, Active, HostState, SharedStore, Unread, ValueKey};
 use crate::suspend::{Callee, Request};
+use crate::throw::call_error;
 use crate::value::{ConvertError, debug_type, downcast};
 
 /// The most items one read takes from the component.
@@ -858,16 +859,15 @@ impl Future {
                     None => {
                         let waiter = awaiting.waiter();
                         let store = self.store.clone();
-                        self.store
-                            .with(|ctx| {
-                                crate::suspend::drive_until_idle(
-                                    &store,
-                                    ctx.run_concurrent(async move |_| {
-                                        std::future::poll_fn(|cx| waiter.arrived(cx)).await
-                                    }),
-                                )
-                            })
-                            .map_err(runtime_error)?;
+                        self.store.with(|mut ctx| {
+                            crate::suspend::drive_until_idle(
+                                &store,
+                                ctx.as_context_mut().run_concurrent(async move |_| {
+                                    std::future::poll_fn(|cx| waiter.arrived(cx)).await
+                                }),
+                            )
+                            .map_err(|err| call_error(&mut ctx, err))
+                        })?;
                     }
                 },
             }
@@ -963,16 +963,15 @@ impl Stream {
                     pipe.want();
                     let waiter = pipe.waiter();
                     let store = self.store.clone();
-                    self.store
-                        .with(|ctx| {
-                            crate::suspend::drive_until_idle(
-                                &store,
-                                ctx.run_concurrent(async move |_| {
-                                    std::future::poll_fn(|cx| waiter.arrived(cx)).await
-                                }),
-                            )
-                        })
-                        .map_err(runtime_error)?;
+                    self.store.with(|mut ctx| {
+                        crate::suspend::drive_until_idle(
+                            &store,
+                            ctx.as_context_mut().run_concurrent(async move |_| {
+                                std::future::poll_fn(|cx| waiter.arrived(cx)).await
+                            }),
+                        )
+                        .map_err(|err| call_error(&mut ctx, err))
+                    })?;
                 }
             }
         }

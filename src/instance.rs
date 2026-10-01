@@ -5,7 +5,7 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ZendHashTable, Zval};
 use wasmtime::Extern;
 
-use crate::error::link_error;
+use crate::error::instantiation_error;
 use crate::exports::Exports;
 use crate::imports;
 use crate::module::Module;
@@ -56,7 +56,7 @@ impl Instance {
                     // A module that failed to link frees the memories it created.
                     let memory = &mut ctx.data_mut().memory;
                     memory.undo();
-                    return Err(link_error(memory.explain(err)));
+                    return Err(instantiation_error(memory.explain(err)));
                 }
             };
             Ok::<_, ext_php_rs::exception::PhpException>(

@@ -114,12 +114,38 @@ pub fn link_error(err: impl Display) -> PhpException {
     PhpException::from_class::<LinkError>(format!("{err:#}"))
 }
 
+/// A `LinkError` for an instantiation that failed while running wasm, such as
+/// a start function whose import failed. Leaves out the coredump wasmtime
+/// attaches to such errors with `wasm.coredump_dir` set, whose description
+/// spans many lines; only traps write it out.
+pub fn instantiation_error(err: wasmtime::Error) -> PhpException {
+    // The dump is a context, not an error type, so it is recognised by its text.
+    let dump = err
+        .downcast_ref::<wasmtime::WasmCoreDump>()
+        .map(ToString::to_string);
+    let message = err
+        .chain()
+        .map(ToString::to_string)
+        .filter(|cause| Some(cause) != dump.as_ref())
+        .collect::<Vec<_>>()
+        .join(": ");
+    PhpException::from_class::<LinkError>(message)
+}
+
 /// Formats a trap as "cause" followed by the wasm backtrace, instead of
 /// wasmtime's default "error while executing at wasm backtrace: ... cause".
 pub fn runtime_error(err: wasmtime::Error) -> PhpException {
+    trap_error(err, None)
+}
+
+/// A `RuntimeError` for a trap, with `note` as its last line.
+pub fn trap_error(err: wasmtime::Error, note: Option<String>) -> PhpException {
     let mut message = err.root_cause().to_string();
     if let Some(backtrace) = err.downcast_ref::<wasmtime::WasmBacktrace>() {
         message.push_str(&format!("\n{backtrace}"));
+    }
+    if let Some(note) = note {
+        message.push_str(&format!("\n{note}"));
     }
     PhpException::from_class::<RuntimeError>(message)
 }

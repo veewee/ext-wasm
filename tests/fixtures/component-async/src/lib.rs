@@ -88,6 +88,15 @@ impl Guest for Component {
         rx
     }
 
+    async fn crash_later() -> wit_bindgen::StreamReader<u32> {
+        let (mut tx, rx) = wit_stream::new::<u32>();
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write_all(vec![0]).await;
+            core::arch::wasm32::unreachable();
+        });
+        rx
+    }
+
     async fn ticker(n: u32) -> wit_bindgen::StreamReader<u32> {
         let (mut tx, rx) = wit_stream::new::<u32>();
         wit_bindgen::spawn_local(async move {

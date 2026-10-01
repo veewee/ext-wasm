@@ -390,6 +390,25 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 - `RuntimeError` for traps such as `unreachable`, out of bounds access or stack exhaustion, with the wasm backtrace in the message,
 - `WasmThrow` for a wasm exception (the exception handling proposal) that reaches PHP. It carries `$tag` and `$payload`. A PHP callback can throw `new WasmThrow($tag, $payload)` for wasm code to catch.
 
+### Coredumps
+
+With `wasm.coredump_dir` set to an absolute directory, every trap also writes a wasm coredump there: the stack at the trap, and the globals and linear memories of the store, in the [coredump format of the WebAssembly tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/Coredump.md). The last line of the `RuntimeError` message names the file, or says why it could not be written:
+
+```ini
+wasm.coredump_dir = /var/log/php/wasm
+```
+
+```
+wasm trap: wasm `unreachable` instruction executed
+error while executing at wasm backtrace:
+    0:     0x3f - <unknown>!<wasm function 0>
+coredump: /var/log/php/wasm/wasm-4242-1790000000000-0.coredump
+```
+
+The setting is off by default and can only be set in php.ini or with `-d`, like the cache settings. Under PHP-FPM with opcache preloading, set it in php.ini rather than per pool, because the engine may be created in the master process. Only traps write a dump: an exception from a PHP import, a wasm exception or a WASI exit does not.
+
+A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included. Files are created readable by the PHP user only on Unix; on Windows they take the directory's permissions. The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`, so a guest with gigabytes of memory needs as much again on the heap at each trap. Turn it on to debug, not as a default in production.
+
 ## Examples
 
 The [examples](examples) folder has small scripts for each feature, and twelve larger ones:
