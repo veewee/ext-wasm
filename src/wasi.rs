@@ -64,6 +64,9 @@ impl Wasi {
     /// @param int|null $outputLimit bytes kept of stdout and of stderr, 16 MiB by default
     /// @param list<string>|null $httpHosts hosts a component may send HTTP requests to: "host", "host:port" or "*.domain"; checked by name, not by the address it resolves to
     /// @param list<string>|null $tcpHosts destinations a component may open TCP connections to: "host:port", "ip:port" or "network/prefix:port", with * for any port; a host is checked by the addresses it resolves to when the component connects
+    /// @param list<string>|null $udpHosts destinations a component may send UDP datagrams to and receive them from, in the same form; a host is resolved once, when this object is created
+    // Each parameter is a PHP named argument, so grouping them would change the PHP API.
+    #[allow(clippy::too_many_arguments)]
     pub fn __construct(
         args: Option<Vec<String>>,
         env: Option<&ZendHashTable>,
@@ -72,9 +75,15 @@ impl Wasi {
         outputLimit: Option<i64>,
         httpHosts: Option<&ZendHashTable>,
         tcpHosts: Option<&ZendHashTable>,
+        udpHosts: Option<&ZendHashTable>,
     ) -> PhpResult<Self> {
         let http_hosts = httpHosts.map(http::parse_hosts).transpose()?;
-        let tcp_hosts = tcpHosts.map(sockets::parse_hosts).transpose()?;
+        let tcp_hosts = tcpHosts
+            .map(|hosts| sockets::parse_hosts(hosts, "tcpHosts"))
+            .transpose()?;
+        let udp_hosts = udpHosts
+            .map(|hosts| sockets::parse_hosts(hosts, "udpHosts"))
+            .transpose()?;
         let output_limit = match outputLimit {
             None => DEFAULT_OUTPUT_LIMIT,
             Some(limit) => usize::try_from(limit)
@@ -87,8 +96,8 @@ impl Wasi {
         // File access otherwise waits for tokio worker threads, which a forked
         // child does not have. Preopens copy this flag, so it is set first.
         builder.allow_blocking_current_thread(true);
-        if let Some(rules) = tcp_hosts {
-            sockets::allow(&mut builder, rules, socket_timeout());
+        if tcp_hosts.is_some() || udp_hosts.is_some() {
+            sockets::allow(&mut builder, tcp_hosts, udp_hosts, socket_timeout());
         }
         builder.args(&args.unwrap_or_default());
         for (key, value) in env.map(ZendHashTable::iter).into_iter().flatten() {
