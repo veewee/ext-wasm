@@ -74,6 +74,24 @@ parameters:
 </stubs>
 ```
 
+## Examples
+
+The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
+
+- [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
+- [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
+- [examples/html](examples/html) sanitizes untrusted HTML with ammonia and rewrites responses with Cloudflare's lol-html, for lazy images, CSP nonces and safe links.
+- [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
+- [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
+- [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
+- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
+- [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
+- [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
+- [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
+- [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
+- [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
+- [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
+
 ## Usage
 
 ### Modules and instances
@@ -247,7 +265,15 @@ $instance->exports->get('docs:markdown/render')->render('**hi**');   // an expor
 $instance->exports->renderHtml('**hi**');                            // a function the world exports
 ```
 
+[examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
+
+#### Reflection
+
+
 `exports()` and `imports()` list every function with its WIT signature as text, such as `func(markdown: string) -> string`, and as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too. Its `params` and `result` are `Wasm\Component\Type\ValueType` objects: `kind` is the WIT keyword (`u32`, `record`, `own`, ...), and `key`, `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds (a map has its key type under `key` and its value type under `element`). A type carries the `name` the component gives it, whatever its kind. Types are matched by shape, so an unnamed type with the same shape as a named one gets that name too. The name is left out when two names fit the same shape or the type holds a resource. This can be used, for example, to generate PHP stubs for a component. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
+
+#### Component values
+
 
 | WIT | PHP |
 |---|---|
@@ -268,6 +294,9 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 | `error-context` | a `Wasm\Component\ErrorContext` with nothing to read: wasmtime 49 gives the host no access to its debug message. PHP cannot create one or give one to a component, so any value passed where an export takes one throws a `TypeError` (`null` still works for an `option`), and an import that returns one fails to link |
 
 A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import: the component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance". A PHP import may call back into its own instance.
+
+#### WASI and network access
+
 
 With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1. A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
 
@@ -295,6 +324,9 @@ $wasi = new Wasm\Wasi(udpHosts: ['127.0.0.1:8125', 'dns.internal:53']);
 
 The entries have the same form as for `tcpHosts`. A component may send datagrams to those destinations and receives only datagrams whose source address is one of them; anything else is dropped before the component sees it. A source address is not authenticated, so a process on an allowed host, or one that spoofs its address, can still send to the component. A send anywhere else fails inside the component with a permission error. Host entries are resolved once, when the `Wasi` object is created, all at the same time and waiting at most `default_socket_timeout` in total, or without a limit when it is 0 or less: wasmtime reports a send whose check is still waiting as sent, so the check for a send has to be answered at once. A name whose addresses change after the `Wasi` object is created is therefore not followed, and a name that does not resolve allows nothing. TCP and UDP stay apart: a `tcpHosts` entry does not allow UDP, and the reverse. Rust's `UdpSocket::set_read_timeout` fails on `wasm32-wasip2`, so a component that waits for a reply polls a nonblocking socket instead.
 
+#### Serving HTTP
+
+
 A component that exports `wasi:http/incoming-handler`, such as one built for `wasi:http/proxy`, can answer HTTP requests from PHP:
 
 ```php
@@ -308,6 +340,9 @@ $response->body;      // the whole body as a string
 ```
 
 `Request` and `Response` are small read-only value objects of the extension, so no PSR-7 package is needed; converting from and to one takes a few lines in userland. The proxy world imports the HTTP types, so the `Wasi` object needs `httpHosts`, and an empty list is enough when the component makes no requests itself. Headers that HTTP handles by itself, such as `host`, `connection` and `transfer-encoding`, are left out of the request the component sees; the host is part of its URL. An error code the component answers with, a component that never sets a response, and a trap are each a `RuntimeError`.
+
+#### Resources
+
 
 Resources, the WIT types with handles and methods, work in both directions. A resource a component exports is a `Wasm\Component\ResourceClass` in its interface, and its handles are `Wasm\Component\Resource` objects:
 
@@ -329,6 +364,9 @@ $instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::
 
 `[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each method and static function the resource declares, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
 
+#### Linking instances
+
+
 One instance's exports can be another's imports. An interface one instance exports can be given as the value of an interface import that declares the same functions, and an exported `ResourceClass` can implement a resource import inside an interface array. Each instance needs a `Wasi` object of its own:
 
 ```php
@@ -339,7 +377,13 @@ $composer = new Instance(Component::fromFile('composer.wasm'), ['docs:demo/count
 
 wasmtime's component linker cannot define an import from another instance's export, so every call between them goes through PHP and converts its values on the way. The importing instance works with the exporting instance's `Resource` objects: a handle it returns is the same PHP object that went in, and one it drops is released to PHP, which drops it in the exporting instance when the last reference goes. A handle of another instance, or one that was dropped or moved, is refused before the call. Linking compares names, not signatures, so a function whose parameters differ between the two fails at its first call, and from then on every call into the importing instance throws a `RuntimeError`. A `Suspending` import of the exporting instance can suspend its Fiber only when the importing instance reached it through a `Suspending` import of its own; through a plain import it throws a `FiberError`. An instance needs its imports when it is created, so two instances cannot import each other's exports. PHP imports that hold on to each other's instances form a cycle the garbage collector does not free, and those instances stay alive until the end of the request.
 
+#### Suspending imports
+
+
 A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface, and then suspends its Fiber as core imports do (see [Async imports](#async-imports)). Every other PHP import of that instance still blocks Fiber switches, and while a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call". Resource constructors and methods implemented by PHP classes cannot suspend. A component's resource destructor runs where PHP releases the handle and cannot suspend either: a `Suspending` import it calls may return, but one that suspends throws a `FiberError` there and, like any failed call, leaves the instance unusable.
+
+#### Async components and streams
+
 
 Components built for the async component model work too: `async func` exports and imports, `stream<T>` and `future<T>`. PHP calls an async export like any other function, and the call returns once the component returned its result; work the component started, such as writing a stream it returned, goes on while PHP reads. An `async func` import is a PHP callable, and as a `Wasm\Suspending` it may suspend its Fiber. A component can have several import calls waiting at once, and PHP runs them one after another. PHP code inside an async import cannot call into its own instance, which is the busy error.
 
@@ -357,9 +401,10 @@ $exports->awaitValue('hi');                // a PHP value where the component ta
 
 Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable. wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
 
-Components cannot be combined with core objects: a component instance has a store of its own. A component that uses fixed-length lists fails to compile with a `CompileError`.
+#### Limits
 
-[examples/rust-markdown](examples/rust-markdown) is a Rust component built with wit-bindgen.
+
+Components cannot be combined with core objects: a component instance has a store of its own. A component that uses fixed-length lists fails to compile with a `CompileError`.
 
 ### Async imports
 
@@ -429,24 +474,6 @@ coredump: /var/log/php/wasm/wasm-4242-1790000000000-0.coredump
 The setting is off by default. Like the cache settings, it can be set in php.ini or with `-d` but not with `ini_set()`. Each process decides once, when it creates its engine, whether traps capture a dump at all. Opcache preloading runs once at server startup for all PHP-FPM pools, so when the preload script uses wasm, a value set per pool comes too late; set it in php.ini then. Only traps write a dump: an exception from a PHP import, a wasm exception or a WASI exit does not, and neither does a trap that stops a call before any wasm runs, such as calling a component instance that already trapped.
 
 A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included. On Unix the files are created readable by the PHP user only. On Windows the extension sets no permissions of its own, so a file gets whatever the directory gives new files. The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`, and at each trap it can take up to twice the non-zero part of the guest's memory on the heap. Turn it on to debug, not as a default in production.
-
-## Examples
-
-The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
-
-- [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
-- [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
-- [examples/html](examples/html) sanitizes untrusted HTML with ammonia and rewrites responses with Cloudflare's lol-html, for lazy images, CSP nonces and safe links.
-- [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
-- [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
-- [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
-- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
-- [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
-- [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
-- [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
-- [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
-- [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
-- [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
 ## Compilation cache
 
