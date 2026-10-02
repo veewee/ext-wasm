@@ -76,7 +76,9 @@ On Windows this needs nightly Rust, because ext-php-rs uses the unstable vectorc
 
 ### Stubs for IDEs and static analysis
 
-The extension's classes and functions are described in [ext-wasm.stubs.php](ext-wasm.stubs.php), with their docblocks and array shapes. PIE installs only the extension, so copy that file into your project, from the release you installed, and point your tools at it. PhpStorm picks it up as soon as it is part of the project. PHPStan needs it under `scanFiles`, Psalm under `<stubs>`:
+The extension's classes and functions are described in [ext-wasm.stubs.php](ext-wasm.stubs.php), with their docblocks and array shapes. PIE installs only the extension, so copy that file into your project, from the release you installed, and point your tools at it.
+
+PhpStorm picks it up as soon as it is part of the project. PHPStan needs it under `scanFiles`, Psalm under `<stubs>`:
 
 ```neon
 # phpstan.neon
@@ -125,7 +127,18 @@ Each import and export carries its `type`, shaped as in the JS type reflection p
 | table | `['element' => 'funcref', 'minimum' => 2]` |
 | tag | `['parameters' => ['i32']]` |
 
-`maximum` is left out when there is none, and a 64-bit memory or table adds `'address' => 'i64'`. A 64-bit limit beyond PHP's int range comes out as a float, as PHP's own integer overflow does. Tags are not part of the proposal, so their shape follows the `Tag` constructor. Value types are named `i32`, `i64`, `f32`, `f64`, `v128`, `funcref` and `externref` (the JS API's spelling `anyfunc` is accepted as input). Other nullable references use their text-format names (`anyref`, `eqref`, `i31ref`, `structref`, `arrayref`, `exnref`, `nullref`, `nullfuncref`, `nullexternref`, `nullexnref`), and non-nullable ones the long form, such as `(ref func)`. A reference to a type the module defines is named by its kind only, such as `(ref null (concrete func))`, because wasmtime does not expose the module's type index. A component's `exports()` uses `type` for its WIT signature, a string, so the key holds a string there and an array here.
+`maximum` is left out when there is none, and a 64-bit memory or table adds `'address' => 'i64'`. A 64-bit limit beyond PHP's int range comes out as a float, as PHP's own integer overflow does.
+
+Tags are not part of the proposal, so their shape follows the `Tag` constructor.
+
+Value types are named as follows:
+
+- `i32`, `i64`, `f32`, `f64`, `v128`, `funcref` and `externref`. The JS API's spelling `anyfunc` is accepted as input.
+- Other nullable references use their text-format names: `anyref`, `eqref`, `i31ref`, `structref`, `arrayref`, `exnref`, `nullref`, `nullfuncref`, `nullexternref`, `nullexnref`.
+- Non-nullable references use the long form, such as `(ref func)`.
+- A reference to a type the module defines is named by its kind only, such as `(ref null (concrete func))`, because wasmtime does not expose the module's type index.
+
+A component's `exports()` uses `type` for its WIT signature, a string, so the key holds a string there and an array here.
 
 `Module::fromFile()` reads local files only, relative to PHP's working directory and within `open_basedir`. Use `file_get_contents()` for stream wrappers such as `phar://`.
 
@@ -176,24 +189,41 @@ $table->set(0, $add);          // an instance that imports $table can call_indir
 $add(2, 3);                    // 5
 ```
 
-Such a `Func` belongs to no store and works with any instance, as in JS. Each store it is used in keeps the callable until the store is freed. It matches a function type of a module, `(ref $t)`, when `$t` is final, has no supertype and is alone in its rec group. It does not match an open `sub` type, a type declared with a supertype or a type in a larger rec group. `type()` of an exported function goes back in when its types are numeric or func and extern references, as for the other constructors below. The callable cannot be a `Wasm\Suspending` and cannot suspend a Fiber, and a store that has used it cannot take an instance with `Wasm\Suspending` imports any more.
+Such a `Func` belongs to no store and works with any instance, as in JS. Each store it is used in keeps the callable until the store is freed.
 
-Called from PHP, such a `Func` runs in a store of its own, so a function reference it returns belongs to that store and cannot go into a table of another one. PHP's garbage collector does not see the callable it holds, so a callable that captures its own `Func`, for recursion, keeps both alive until that variable is set to `null`.
+It matches a function type of a module, `(ref $t)`, when `$t` is final, has no supertype and is alone in its rec group. It does not match an open `sub` type, a type declared with a supertype or a type in a larger rec group.
+
+`type()` of an exported function goes back in when its types are numeric or func and extern references, as for the other constructors below.
+
+The callable cannot be a `Wasm\Suspending` and cannot suspend a Fiber. A store that has used it cannot take an instance with `Wasm\Suspending` imports any more.
+
+Called from PHP, such a `Func` runs in a store of its own. A function reference it returns belongs to that store and cannot go into a table of another one.
+
+PHP's garbage collector does not see the callable it holds. A callable that captures its own `Func`, for recursion, keeps both alive until that variable is set to `null`.
 
 `Global` is a reserved word in PHP, which is why the class is called `GlobalVar`. PHP has no shared `ArrayBuffer`, so memory is read and written through copies instead of a live view.
 
-`type()` on a `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` gives the same shape as `exports()`, with the current size of a memory or table as `minimum`. The constructors take `minimum` as well as `initial`, and `address`, so a type goes back in: `new Wasm\Memory($memory->type())`. That works for numeric types and for func and extern references; a `GlobalVar` or `Table` of `(ref func)` or `(ref extern)` needs a value to start with, and a 64-bit limit that came out as a float does not go back in. Other reference types, such as `anyref`, cannot hold a PHP value and are a `TypeError`.
+`type()` on a `Func`, `Memory`, `Table`, `GlobalVar` or `Tag` gives the same shape as `exports()`, with the current size of a memory or table as `minimum`.
+
+The constructors take `minimum` as well as `initial`, and `address`, so a type goes back in: `new Wasm\Memory($memory->type())`. That works for numeric types and for func and extern references, with two caveats:
+
+- A `GlobalVar` or `Table` of `(ref func)` or `(ref extern)` needs a value to start with.
+- A 64-bit limit that came out as a float does not go back in.
+
+Other reference types, such as `anyref`, cannot hold a PHP value and are a `TypeError`.
 
 ### Stores
 
 wasmtime keeps wasm objects in stores and frees memory one whole store at a time. The extension picks a store for every object you create:
 
-- an instance joins the store of the `Memory`, `Table`, `GlobalVar`, `Tag` or `Func` objects it imports, and gets a store of its own when it imports none,
-- a `Table` or `GlobalVar` joins the store of the exported function it starts with, as `$table` does above. A `Func` made from a PHP callable has no store, so it does not choose one,
-- any other `Memory`, `Table`, `GlobalVar` or `Tag` goes into a store that standalone objects share, so they can be imported together as in JS. Once an instance imports from that store, or a `Func` made from a PHP callable is used in it, standalone objects created after it get a new shared store,
-- the exports of an instance live in the store of that instance.
+- An instance joins the store of the `Memory`, `Table`, `GlobalVar`, `Tag` or `Func` objects it imports. It gets a store of its own when it imports none.
+- A `Table` or `GlobalVar` joins the store of the exported function it starts with, as `$table` does above. A `Func` made from a PHP callable has no store, so it does not choose one.
+- Any other `Memory`, `Table`, `GlobalVar` or `Tag` goes into a store that standalone objects share, so they can be imported together as in JS. Once an instance imports from that store, or a `Func` made from a PHP callable is used in it, standalone objects created after it get a new shared store.
+- The exports of an instance live in the store of that instance.
 
-Dropping an instance together with its exports frees its memory, also in a long-running worker. Objects from two stores cannot be combined, so filling a standalone table with functions of an unrelated instance throws a `LinkError`. Group such objects in a `Wasm\Store`:
+Dropping an instance together with its exports frees its memory, also in a long-running worker.
+
+Objects from two stores cannot be combined, so filling a standalone table with functions of an unrelated instance throws a `LinkError`. Group such objects in a `Wasm\Store`:
 
 ```php
 $store = new Wasm\Store();
@@ -206,9 +236,13 @@ $table->set(0, $math->exports->double);
 
 ### Memory limit
 
-`wasm.memory_limit` caps the memory of each store: its linear memories, and its tables at 8 bytes per element, counted together. It takes a byte count with an optional `K`, `M` or `G` suffix (`64M`, `1G`), and `0` or `-1` means no limit, the default. `ini_set()` refuses an invalid value and returns false.
+`wasm.memory_limit` caps the memory of each store: its linear memories, and its tables at 8 bytes per element, counted together.
 
-A store takes the value set when it is created and keeps it for its whole life. `ini_set()` therefore applies to stores created after it: a `Wasm\Store`, a `Wasm\Wasi`, a component instance, and a core instance that gets a store of its own. A core instance created with `store:`, or with imports from existing wasm objects (a standalone `Memory` or `Table`, another instance's exports, `$wasi->getImportObject()`), joins that store and gets that store's limit, whatever the setting is now.
+It takes a byte count with an optional `K`, `M` or `G` suffix (`64M`, `1G`), and `0` or `-1` means no limit, the default. `ini_set()` refuses an invalid value and returns false.
+
+A store takes the value set when it is created and keeps it for its whole life. `ini_set()` therefore applies to stores created after it: a `Wasm\Store`, a `Wasm\Wasi`, a component instance, and a core instance that gets a store of its own.
+
+A core instance created with `store:`, or with imports from existing wasm objects (a standalone `Memory` or `Table`, another instance's exports, `$wasi->getImportObject()`), joins that store and gets that store's limit, whatever the setting is now.
 
 ```php
 ini_set('wasm.memory_limit', '64M');
@@ -216,7 +250,16 @@ $instance = new Wasm\Instance($module);   // this instance and its memory get 64
 ini_restore('wasm.memory_limit');
 ```
 
-Growing past the limit fails the way wasm expects: `memory.grow` and `table.grow` return -1, and `Memory::grow()` and `Table::grow()` from PHP throw a `ValueError`. An instance whose initial memory or tables are already over the limit is a `LinkError`, and a standalone `Memory` or `Table` over it throws a `ValueError`. Those errors name `wasm.memory_limit`. Standalone objects created after the limit changed get a new shared store, so a limit set around one library call does not reach them.
+Growing past the limit fails the way wasm expects:
+
+- `memory.grow` and `table.grow` return -1.
+- `Memory::grow()` and `Table::grow()` from PHP throw a `ValueError`.
+- An instance whose initial memory or tables are already over the limit is a `LinkError`.
+- A standalone `Memory` or `Table` over the limit throws a `ValueError`.
+
+Those errors name `wasm.memory_limit`.
+
+Standalone objects created after the limit changed get a new shared store, so a limit set around one library call does not reach them.
 
 There is no time limit for wasm code. PHP's `max_execution_time` does not interrupt a call that loops in wasm, but PHP's hard timeout ends the process `hard_timeout` seconds later (2 by default), without running shutdown functions. With `hard_timeout=0` the process does not end at all. This was observed with the CLI on PHP 8.4 (NTS) on macOS.
 
@@ -247,7 +290,9 @@ Modules that work as a library export `_initialize` instead of `_start`. Call `$
 
 ### Components
 
-A WebAssembly component describes its imports and exports in WIT, the interface language of the component model, so its functions take and return strings, records, lists and other typed values instead of numbers and memory addresses. The classes live in `Wasm\Component`, next to the core `Wasm\Module` and `Wasm\Instance`, and the value mapping is modelled on that of [jco](https://github.com/bytecodealliance/jco), the JavaScript toolchain for components, adapted where PHP differs:
+A WebAssembly component describes its imports and exports in WIT, the interface language of the component model. So its functions take and return strings, records, lists and other typed values instead of numbers and memory addresses.
+
+The classes live in `Wasm\Component`, next to the core `Wasm\Module` and `Wasm\Instance`. The value mapping is modelled on that of [jco](https://github.com/bytecodealliance/jco), the JavaScript toolchain for components, adapted where PHP differs:
 
 ```php
 use Wasm\Component\Component;
@@ -270,7 +315,23 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 #### Reflection
 
 
-`exports()` and `imports()` list every function with its WIT signature as text, such as `func(markdown: string) -> string`, and as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too. Its `params` and `result` are `Wasm\Component\Type\ValueType` objects: `kind` is the WIT keyword (`u32`, `record`, `own`, ...), and `key`, `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds (a map has its key type under `key` and its value type under `element`). A type carries the `name` the component gives it, whatever its kind. Types are matched by shape, so an unnamed type with the same shape as a named one gets that name too. The name is left out when two names fit the same shape or the type holds a resource. This can be used, for example, to generate PHP stubs for a component. `get()` takes an export by its WIT name, with or without the version, and function names become camelCase methods, so `render-html` is `renderHtml()`. Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
+`exports()` and `imports()` list every function with its WIT signature in two forms:
+
+- as text, such as `func(markdown: string) -> string`,
+- as a `Wasm\Component\Type\FunctionType` under `signature`, which `Func::type()` returns too.
+
+Its `params` and `result` are `Wasm\Component\Type\ValueType` objects:
+
+- `kind` is the WIT keyword (`u32`, `record`, `own`, ...).
+- `key`, `element`, `types`, `fields`, `cases`, `names`, `ok`, `err` and `resource` describe what the kind holds. A map has its key type under `key` and its value type under `element`.
+
+A type carries the `name` the component gives it, whatever its kind. Types are matched by shape, so an unnamed type with the same shape as a named one gets that name too. The name is left out when two names fit the same shape or the type holds a resource.
+
+This can be used, for example, to generate PHP stubs for a component.
+
+`get()` takes an export by its WIT name, with or without the version. Function names become camelCase methods, so `render-html` is `renderHtml()`.
+
+Imports are keyed the same way: an interface by its name, with or without version, holding its functions by camelCase name.
 
 #### Component values
 
@@ -284,21 +345,25 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 | `list<u8>` | binary string; every byte crosses as a value of its own, and about 4 MB exceeds wasmtime's copy limit for one call |
 | `list<T>`, `tuple<...>` | list array |
 | `record` | array with camelCase keys; `option` fields may be left out |
-| `map<k, v>` | array from key to value, in the map's order. Keys follow PHP's own rule: a `string` or `char` key such as `"7"` becomes the int key `7` (`"-0"` or `"07"` stay strings), and `bool` keys are `0` and `1`; such int keys are accepted again going in. A map with the same key twice keeps the last value |
+| `map<k, v>` | array from key to value, in the map's order. Keys follow PHP's own rule: a `string` or `char` key such as `"7"` becomes the int key `7` (`"-0"` or `"07"` stay strings), and `bool` keys are `0` and `1`. Such int keys are accepted again going in. A map with the same key twice keeps the last value |
 | `flags` | array of camelCase names to `bool` |
 | `enum` | its case name as a string, such as `'dark-blue'` |
 | `option<T>` | `null` or the value |
 | `variant` | `new Wasm\Component\Variant('case-name', $payload)` |
 | `result` returned by a function | the ok value, or a thrown `Wasm\Exception\ComponentError` with `$payload` |
 | `result` anywhere else | `Wasm\Component\Result::ok($value)` or `Result::err($error)` |
-| `error-context` | a `Wasm\Component\ErrorContext` with nothing to read: wasmtime 49 gives the host no access to its debug message. PHP cannot create one or give one to a component, so any value passed where an export takes one throws a `TypeError` (`null` still works for an `option`), and an import that returns one fails to link |
+| `error-context` | a `Wasm\Component\ErrorContext` with nothing to read: wasmtime 49 gives the host no access to its debug message. PHP cannot create one or give one to a component. So any value passed where an export takes one throws a `TypeError` (`null` still works for an `option`), and an import that returns one fails to link |
 
-A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import: the component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance". A PHP import may call back into its own instance.
+A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. A PHP import may call back into its own instance.
+
+Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import. The component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance".
 
 #### WASI
 
 
-With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1. A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
+With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1.
+
+A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
 
 #### Outgoing HTTP
 
@@ -309,7 +374,27 @@ A component can make HTTP and HTTPS requests through `wasi:http` when the `Wasi`
 $wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.example.org']);
 ```
 
-An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Connecting, waiting for the response headers and every wait between body chunks are each limited to PHP's `default_socket_timeout`, read when the component is instantiated, and the whole setup until the headers, TLS handshake included, to twice that. With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies and the TLS handshake has none. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
+An entry takes one of three forms:
+
+- a host, for any port,
+- `host:port`, for only that port. A URL without a port uses 80 or 443,
+- `*.domain`, for its subdomains, not the domain itself.
+
+Hosts are compared without case. IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode.
+
+A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`. An empty list denies every request.
+
+The timeouts come from PHP's `default_socket_timeout`, read when the component is instantiated:
+
+- Connecting, waiting for the response headers and every wait between body chunks are each limited to that value.
+- The whole setup until the headers, TLS handshake included, is limited to twice that.
+- With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies, and the TLS handshake has none.
+
+Redirects are not followed, so the component sees them and every next request is checked again.
+
+The list is checked by name, so an allowed name that resolves to a private address still connects.
+
+HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
 
 #### TCP sockets
 
@@ -320,7 +405,31 @@ A component can open TCP connections through `wasi:sockets`, for example a datab
 $wasi = new Wasm\Wasi(tcpHosts: ['db.internal:5432', '10.0.0.0/8:6379', '[fd00::/8]:*']);
 ```
 
-An entry is a host, an IP address or a network in CIDR notation, followed by a port or `*` for any port; IPv6 goes in brackets. wasmtime checks every connect by address and port only, because the component resolves names itself, so a host entry is checked by resolving it on the host at the moment the component connects. It allows whatever addresses the name resolves to, also when the component connects to one of them by address. A connect to anything else fails inside the component with a permission error, before a packet is sent. Without `tcpHosts`, or with an empty list, every connect is refused. Name lookups are only turned on when `tcpHosts` or `udpHosts` holds a host entry: a component that connects by name to an IP-only list gets a lookup error. While lookups are on, the component can look up any name, which sends those names to the host's resolver. Listening stays refused, and UDP needs `udpHosts`; a bind to the wildcard address with port 0 is allowed, because every connect makes that bind first, but listening on it is not. A wide network such as `0.0.0.0/0` includes loopback and link-local addresses, a host entry whose name resolves to a private address allows that address, and an IPv6 rule ignores the interface a link-local address is reached through. The extension's own lookup for a name rule waits at most PHP's `default_socket_timeout` and counts as a refusal after that. There is no timeout from the extension for the connect itself, and `max_execution_time` does not interrupt a connect that hangs (75 seconds on macOS for an address that never answers). As with wasm code that loops, PHP's hard timeout ends the whole process `hard_timeout` seconds after the limit, without running shutdown functions. So connect with a timeout in the component, such as Rust's `TcpStream::connect_timeout`. On `wasm32-wasip2` that call returns `Ok` for a refused connection too, so check `take_error()` on the stream afterwards, as [examples/service-probe](examples/service-probe) does. `tcpHosts` has no effect for core modules, which have no outgoing sockets in WASI preview1.
+An entry is a host, an IP address or a network in CIDR notation, followed by a port or `*` for any port. IPv6 goes in brackets.
+
+wasmtime checks every connect by address and port only, because the component resolves names itself. So a host entry is checked by resolving it on the host at the moment the component connects. It allows whatever addresses the name resolves to, also when the component connects to one of them by address.
+
+A connect to anything else fails inside the component with a permission error, before a packet is sent. Without `tcpHosts`, or with an empty list, every connect is refused.
+
+Name lookups are only turned on when `tcpHosts` or `udpHosts` holds a host entry. A component that connects by name to an IP-only list gets a lookup error. While lookups are on, the component can look up any name, which sends those names to the host's resolver.
+
+Listening stays refused, and UDP needs `udpHosts`. A bind to the wildcard address with port 0 is allowed, because every connect makes that bind first, but listening on it is not.
+
+Some entries cover more than their notation shows:
+
+- A wide network such as `0.0.0.0/0` includes loopback and link-local addresses.
+- A host entry whose name resolves to a private address allows that address.
+- An IPv6 rule ignores the interface a link-local address is reached through.
+
+The timeouts work as follows:
+
+- The extension's own lookup for a name rule waits at most PHP's `default_socket_timeout` and counts as a refusal after that.
+- There is no timeout from the extension for the connect itself. `max_execution_time` does not interrupt a connect that hangs (75 seconds on macOS for an address that never answers).
+- As with wasm code that loops, PHP's hard timeout ends the whole process `hard_timeout` seconds after the limit, without running shutdown functions.
+
+So connect with a timeout in the component, such as Rust's `TcpStream::connect_timeout`. On `wasm32-wasip2` that call returns `Ok` for a refused connection too, so check `take_error()` on the stream afterwards, as [examples/service-probe](examples/service-probe) does.
+
+`tcpHosts` has no effect for core modules, which have no outgoing sockets in WASI preview1.
 
 #### UDP sockets
 
@@ -331,7 +440,19 @@ UDP works the same way with `udpHosts`, for a metrics client that sends StatsD d
 $wasi = new Wasm\Wasi(udpHosts: ['127.0.0.1:8125', 'dns.internal:53']);
 ```
 
-The entries have the same form as for `tcpHosts`. A component may send datagrams to those destinations and receives only datagrams whose source address is one of them; anything else is dropped before the component sees it. A source address is not authenticated, so a process on an allowed host, or one that spoofs its address, can still send to the component. A send anywhere else fails inside the component with a permission error. Host entries are resolved once, when the `Wasi` object is created, all at the same time and waiting at most `default_socket_timeout` in total, or without a limit when it is 0 or less: wasmtime reports a send whose check is still waiting as sent, so the check for a send has to be answered at once. A name whose addresses change after the `Wasi` object is created is therefore not followed, and a name that does not resolve allows nothing. TCP and UDP stay apart: a `tcpHosts` entry does not allow UDP, and the reverse. Rust's `UdpSocket::set_read_timeout` fails on `wasm32-wasip2`, so a component that waits for a reply polls a nonblocking socket instead.
+The entries have the same form as for `tcpHosts`.
+
+A component may send datagrams to those destinations and receives only datagrams whose source address is one of them. Anything else is dropped before the component sees it. A source address is not authenticated, so a process on an allowed host, or one that spoofs its address, can still send to the component.
+
+A send anywhere else fails inside the component with a permission error.
+
+Host entries are resolved once, when the `Wasi` object is created. They are resolved all at the same time, waiting at most `default_socket_timeout` in total, or without a limit when it is 0 or less. They are resolved up front because wasmtime reports a send whose check is still waiting as sent, so the check for a send has to be answered at once.
+
+A name whose addresses change after the `Wasi` object is created is therefore not followed, and a name that does not resolve allows nothing.
+
+TCP and UDP stay apart: a `tcpHosts` entry does not allow UDP, and the reverse.
+
+Rust's `UdpSocket::set_read_timeout` fails on `wasm32-wasip2`, so a component that waits for a reply polls a nonblocking socket instead.
 
 #### Serving HTTP
 
@@ -348,7 +469,17 @@ $response->headers;   // ['content-type' => ['application/json']], names lowerca
 $response->body;      // the whole body as a string
 ```
 
-`Request` and `Response` are small read-only value objects of the extension, so no PSR-7 package is needed; converting from and to one takes a few lines in userland. The proxy world imports the HTTP types, so the `Wasi` object needs `httpHosts`, and an empty list is enough when the component makes no requests itself. Headers that HTTP handles by itself, such as `host`, `connection` and `transfer-encoding`, are left out of the request the component sees; the host is part of its URL. An error code the component answers with, a component that never sets a response, and a trap are each a `RuntimeError`.
+`Request` and `Response` are small read-only value objects of the extension, so no PSR-7 package is needed. Converting from and to one takes a few lines in userland.
+
+The proxy world imports the HTTP types, so the `Wasi` object needs `httpHosts`. An empty list is enough when the component makes no requests itself.
+
+Headers that HTTP handles by itself, such as `host`, `connection` and `transfer-encoding`, are left out of the request the component sees. The host is part of its URL.
+
+Each of these is a `RuntimeError`:
+
+- an error code the component answers with,
+- a component that never sets a response,
+- a trap.
 
 #### Resources
 
@@ -363,7 +494,11 @@ $counters->get('counter')->zero();              // [static]counter.zero
 $counter->drop();                               // or let PHP release it
 ```
 
-Releasing the PHP object drops the handle, and the component runs its destructor for it. Passing a handle where WIT expects an owned value moves it into the component: the PHP object is unusable afterwards. A borrowed parameter leaves it with PHP. A method called `drop` is reached with `$counter->call('drop')`.
+Releasing the PHP object drops the handle, and the component runs its destructor for it.
+
+Passing a handle where WIT expects an owned value moves it into the component: the PHP object is unusable afterwards. A borrowed parameter leaves it with PHP.
+
+A method called `drop` is reached with `$counter->call('drop')`.
 
 A resource a component imports is implemented by a PHP class, given by name in the import object:
 
@@ -371,12 +506,23 @@ A resource a component imports is implemented by a PHP class, given by name in t
 $instance = new Instance($component, ['docs:demo/log' => ['logger' => MyLogger::class]], wasi: $wasi);
 ```
 
-`[constructor]logger` runs `new MyLogger(...)`, `[method]logger.write` calls `$logger->write(...)` and `[static]logger.from-env` calls `MyLogger::fromEnv(...)`. The class must have each method and static function the resource declares, or instantiating is a `LinkError`. A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
+- `[constructor]logger` runs `new MyLogger(...)`.
+- `[method]logger.write` calls `$logger->write(...)`.
+- `[static]logger.from-env` calls `MyLogger::fromEnv(...)`.
+
+The class must have each method and static function the resource declares, or instantiating is a `LinkError`.
+
+A PHP object passed to the component comes back as the same object, and the component dropping its handle releases the object.
 
 #### Linking instances
 
 
-One instance's exports can be another's imports. An interface one instance exports can be given as the value of an interface import that declares the same functions, and an exported `ResourceClass` can implement a resource import inside an interface array. Each instance needs a `Wasi` object of its own:
+One instance's exports can be another's imports:
+
+- An interface one instance exports can be given as the value of an interface import that declares the same functions.
+- An exported `ResourceClass` can implement a resource import inside an interface array.
+
+Each instance needs a `Wasi` object of its own:
 
 ```php
 $counters = (new Instance(Component::fromFile('counters.wasm'), wasi: new Wasi()))->exports->get('docs:demo/counters');
@@ -384,17 +530,35 @@ $composer = new Instance(Component::fromFile('composer.wasm'), ['docs:demo/count
 // or: ['docs:demo/counters' => ['counter' => $counters->get('counter'), 'total' => fn (Resource $a, Resource $b): int => $a->value() + $b->value()]]
 ```
 
-wasmtime's component linker cannot define an import from another instance's export, so every call between them goes through PHP and converts its values on the way. The importing instance works with the exporting instance's `Resource` objects: a handle it returns is the same PHP object that went in, and one it drops is released to PHP, which drops it in the exporting instance when the last reference goes. A handle of another instance, or one that was dropped or moved, is refused before the call. Linking compares names, not signatures, so a function whose parameters differ between the two fails at its first call, and from then on every call into the importing instance throws a `RuntimeError`. A `Suspending` import of the exporting instance can suspend its Fiber only when the importing instance reached it through a `Suspending` import of its own; through a plain import it throws a `FiberError`. An instance needs its imports when it is created, so two instances cannot import each other's exports. PHP imports that hold on to each other's instances form a cycle the garbage collector does not free, and those instances stay alive until the end of the request.
+wasmtime's component linker cannot define an import from another instance's export. So every call between them goes through PHP and converts its values on the way.
+
+The importing instance works with the exporting instance's `Resource` objects. A handle it returns is the same PHP object that went in. One it drops is released to PHP, which drops it in the exporting instance when the last reference goes. A handle of another instance, or one that was dropped or moved, is refused before the call.
+
+Linking compares names, not signatures. A function whose parameters differ between the two fails at its first call, and from then on every call into the importing instance throws a `RuntimeError`.
+
+A `Suspending` import of the exporting instance can suspend its Fiber only when the importing instance reached it through a `Suspending` import of its own. Through a plain import it throws a `FiberError`.
+
+An instance needs its imports when it is created, so two instances cannot import each other's exports. PHP imports that hold on to each other's instances form a cycle the garbage collector does not free, and those instances stay alive until the end of the request.
 
 #### Suspending imports
 
 
-A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface, and then suspends its Fiber as core imports do (see [Async imports](#async-imports)). Every other PHP import of that instance still blocks Fiber switches, and while a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call". Resource constructors and methods implemented by PHP classes cannot suspend. A component's resource destructor runs where PHP releases the handle and cannot suspend either: a `Suspending` import it calls may return, but one that suspends throws a `FiberError` there and, like any failed call, leaves the instance unusable.
+A component import may be a `Wasm\Suspending` too, at the world level or inside an imported interface. It then suspends its Fiber as core imports do (see [Async imports](#async-imports)).
+
+Every other PHP import of that instance still blocks Fiber switches. While a call waits, calling into the same instance throws a `RuntimeError` "the store is busy with a suspended call".
+
+Resource constructors and methods implemented by PHP classes cannot suspend.
+
+A component's resource destructor runs where PHP releases the handle and cannot suspend either. A `Suspending` import it calls may return, but one that suspends throws a `FiberError` there and, like any failed call, leaves the instance unusable.
 
 #### Async components and streams
 
 
-Components built for the async component model work too: `async func` exports and imports, `stream<T>` and `future<T>`. PHP calls an async export like any other function, and the call returns once the component returned its result; work the component started, such as writing a stream it returned, goes on while PHP reads. An `async func` import is a PHP callable, and as a `Wasm\Suspending` it may suspend its Fiber. A component can have several import calls waiting at once, and PHP runs them one after another. PHP code inside an async import cannot call into its own instance, which is the busy error.
+Components built for the async component model work too: `async func` exports and imports, `stream<T>` and `future<T>`.
+
+PHP calls an async export like any other function, and the call returns once the component returned its result. Work the component started, such as writing a stream it returned, goes on while PHP reads.
+
+An `async func` import is a PHP callable, and as a `Wasm\Suspending` it may suspend its Fiber. A component can have several import calls waiting at once, and PHP runs them one after another. PHP code inside an async import cannot call into its own instance, which is the busy error.
 
 ```php
 $exports = (new Instance($component, ['slow' => new Wasm\Suspending($slow)], new Wasm\Wasi()))->exports;
@@ -406,9 +570,28 @@ $exports->greetLater('ada')->await();      // a Wasm\Component\Future: 'hello, a
 $exports->awaitValue('hi');                // a PHP value where the component takes a future
 ```
 
-`Stream::read()` returns the next chunk, `null` at the end, and iterating a stream gives its chunks; a `stream<u8>` comes in binary strings, other streams as lists of values. The component writes only while PHP reads, so an endless stream does not fill memory, and a stream dropped unread is closed. Where a component takes a stream, PHP passes an array, an `Iterator` or an `IteratorAggregate`, which the component reads lazily; for a `stream<u8>` every element is a string of bytes. The feed rewinds an `Iterator` first, as `foreach` does, so a generator that already moved past its first element throws; wrap it in a `NoRewindIterator` to stream the rest. A sync export cannot wait for a stream, so it reads an array but throws a `RuntimeError` when it reads from an `Iterator` or an `IteratorAggregate`. `Future::await()` returns the value, the same on every call. Streams and futures carry `bool`, numbers and `string`, and futures carry `char` too (wasmtime rejects `stream<char>` when compiling); a component whose imports carry anything else in them fails to link, and an export that returns one throws when called. A read that can never progress, because the component waits for something that never happens, throws a `RuntimeError` instead of hanging.
+Streams coming from the component:
 
-Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable. wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
+- `Stream::read()` returns the next chunk, and `null` at the end. Iterating a stream gives its chunks.
+- A `stream<u8>` comes in binary strings, other streams as lists of values.
+- The component writes only while PHP reads, so an endless stream does not fill memory.
+- A stream dropped unread is closed.
+
+Streams going into the component:
+
+- Where a component takes a stream, PHP passes an array, an `Iterator` or an `IteratorAggregate`, which the component reads lazily. For a `stream<u8>` every element is a string of bytes.
+- The feed rewinds an `Iterator` first, as `foreach` does, so a generator that already moved past its first element throws. Wrap it in a `NoRewindIterator` to stream the rest.
+- A sync export cannot wait for a stream. It reads an array, but throws a `RuntimeError` when it reads from an `Iterator` or an `IteratorAggregate`.
+
+`Future::await()` returns the value, the same on every call.
+
+Streams and futures carry `bool`, numbers and `string`, and futures carry `char` too (wasmtime rejects `stream<char>` when compiling). A component whose imports carry anything else in them fails to link, and an export that returns one throws when called.
+
+A read that can never progress, because the component waits for something that never happens, throws a `RuntimeError` instead of hanging.
+
+Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable.
+
+wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
 
 #### Limits
 
@@ -436,9 +619,22 @@ $results = Amp\Future\await($futures);   // about 0.1 s in total
 
 In JS the export also has to be wrapped in `WebAssembly.promising()`. PHP needs no wrapper, because calling the export only blocks the Fiber that called it.
 
-An instance with a `Suspending` import makes its store async. In an async store every PHP callback, Suspending or plain, runs while its wasm call is paused, and wasmtime's garbage collector cannot see the frames of a paused call. So while a callback runs, the store throws a `RuntimeError` "the store is busy with a suspended call" for anything that could start the collector: calling its exports, instantiating into it, `Wasi::start()` or `initialize()`, and passing a new PHP value as an externref. This applies inside the callback and in other Fibers alike. Memory, globals and tables stay usable.
+An instance with a `Suspending` import makes its store async. In an async store every PHP callback, Suspending or plain, runs while its wasm call is paused. wasmtime's garbage collector cannot see the frames of a paused call.
 
-In practice, give every Fiber an instance of its own, and have the callback write its answer into memory at an address wasm passes in instead of calling an allocator export. A store that already has plain PHP callbacks cannot take Suspending imports and throws a `LinkError`. Plain callbacks in an async store still cannot switch Fibers, and a call into an async store takes about 0.1 microseconds longer than into a sync one, measured on an Apple Silicon Mac.
+So while a callback runs, the store throws a `RuntimeError` "the store is busy with a suspended call" for anything that could start the collector:
+
+- calling its exports,
+- instantiating into it,
+- `Wasi::start()` or `initialize()`,
+- passing a new PHP value as an externref.
+
+This applies inside the callback and in other Fibers alike. Memory, globals and tables stay usable.
+
+In practice, give every Fiber an instance of its own. Have the callback write its answer into memory at an address wasm passes in, instead of calling an allocator export.
+
+A store that already has plain PHP callbacks cannot take Suspending imports and throws a `LinkError`. Plain callbacks in an async store still cannot switch Fibers.
+
+A call into an async store takes about 0.1 microseconds longer than into a sync one, measured on an Apple Silicon Mac.
 
 [examples/async](examples/async) runs ten lookups concurrently through Amp.
 
@@ -467,7 +663,9 @@ Everything the engine raises extends `Wasm\Exception\WasmException`:
 
 ### Coredumps
 
-With `wasm.coredump_dir` set to an absolute directory, every trap raised while wasm code runs also writes a wasm coredump there: the stack at the trap, and the globals and linear memories of the store, in the [coredump format of the WebAssembly tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/Coredump.md). The last line of the `RuntimeError` message names the file, or says why it could not be written:
+With `wasm.coredump_dir` set to an absolute directory, every trap raised while wasm code runs also writes a wasm coredump there. The dump holds the stack at the trap, and the globals and linear memories of the store, in the [coredump format of the WebAssembly tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/Coredump.md).
+
+The last line of the `RuntimeError` message names the file, or says why it could not be written:
 
 ```ini
 wasm.coredump_dir = /var/log/php/wasm
@@ -480,13 +678,30 @@ error while executing at wasm backtrace:
 coredump: /var/log/php/wasm/wasm-4242-1790000000000-0.coredump
 ```
 
-The setting is off by default. Like the cache settings, it can be set in php.ini or with `-d` but not with `ini_set()`. Each process decides once, when it creates its engine, whether traps capture a dump at all. Opcache preloading runs once at server startup for all PHP-FPM pools, so when the preload script uses wasm, a value set per pool comes too late; set it in php.ini then. Only traps write a dump: an exception from a PHP import, a wasm exception or a WASI exit does not, and neither does a trap that stops a call before any wasm runs, such as calling a component instance that already trapped.
+The setting is off by default. Like the cache settings, it can be set in php.ini or with `-d` but not with `ini_set()`. Each process decides once, when it creates its engine, whether traps capture a dump at all.
 
-A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included. On Unix the files are created readable by the PHP user only. On Windows the extension sets no permissions of its own, so a file gets whatever the directory gives new files. The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`, and at each trap it can take up to twice the non-zero part of the guest's memory on the heap. Turn it on to debug, not as a default in production.
+Opcache preloading runs once at server startup for all PHP-FPM pools. So when the preload script uses wasm, a value set per pool comes too late. Set it in php.ini then.
+
+Only traps write a dump. These do not:
+
+- an exception from a PHP import,
+- a wasm exception,
+- a WASI exit,
+- a trap that stops a call before any wasm runs, such as calling a component instance that already trapped.
+
+A dump holds the store's whole linear memory, so it can contain anything the guest had in memory, secrets included.
+
+On Unix the files are created readable by the PHP user only. On Windows the extension sets no permissions of its own, so a file gets whatever the directory gives new files.
+
+The dump is built in memory before it is written, outside `memory_limit` and `wasm.memory_limit`. At each trap it can take up to twice the non-zero part of the guest's memory on the heap.
+
+Turn it on to debug, not as a default in production.
 
 ## Compilation cache
 
-Compiling a large module to machine code takes a while: mago's 18 MB build needs about three seconds. Like a browser, the extension keeps compiled code in a cache on disk, keyed by the module bytes and the engine settings, so the next process loads it in milliseconds. A changed module or a new extension version simply compiles again.
+Compiling a large module to machine code takes a while: mago's 18 MB build needs about three seconds.
+
+Like a browser, the extension keeps compiled code in a cache on disk, keyed by the module bytes and the engine settings, so the next process loads it in milliseconds. A changed module or a new extension version simply compiles again.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -512,9 +727,21 @@ rename('mago.cwasm.tmp', 'mago.cwasm');   // never leave a half-written artifact
 $module = (new Wasm\Serializer())->deserializeModuleFile('mago.cwasm');
 ```
 
-`serializeComponent()`, `deserializeComponent()` and `deserializeComponentFile()` do the same for components, and `deserializeModule()` takes the artifact as a string. On mago's 18 MB module, in a release build on an Apple M3 Pro, loading the artifact took about 40 ms, against 100 ms for a warm cache hit and three seconds for a compile. A module does not outlive the request, so every request that uses it pays that load again, along with memory of about the artifact's size (30 MB for mago).
+`serializeComponent()`, `deserializeComponent()` and `deserializeComponentFile()` do the same for components, and `deserializeModule()` takes the artifact as a string.
 
-An artifact loads only where it was built for: the same OS, CPU architecture and wasmtime major version, a CPU with at least the features of the one that built it, and ext-wasm engine settings that wasmtime accepts as compatible with the ones it was built with. An artifact from a CI runner with newer CPU features than production, from macOS on a Linux container, or from before an ext-wasm upgrade that changed the engine settings in an incompatible way throws a `CompileError` that says why. Build artifacts on the host or CPU class you deploy to, and fall back to compiling when one does not fit or is missing:
+On mago's 18 MB module, in a release build on an Apple M3 Pro, loading the artifact took about 40 ms, against 100 ms for a warm cache hit and three seconds for a compile.
+
+A module does not outlive the request. So every request that uses it pays that load again, along with memory of about the artifact's size (30 MB for mago).
+
+An artifact loads only where it was built for:
+
+- the same OS, CPU architecture and wasmtime major version,
+- a CPU with at least the features of the one that built it,
+- ext-wasm engine settings that wasmtime accepts as compatible with the ones it was built with.
+
+An artifact that does not fit throws a `CompileError` that says why. Examples are an artifact from a CI runner with newer CPU features than production, from macOS on a Linux container, or from before an ext-wasm upgrade that changed the engine settings in an incompatible way.
+
+Build artifacts on the host or CPU class you deploy to, and fall back to compiling when one does not fit or is missing:
 
 ```php
 $serializer = new Wasm\Serializer();
@@ -525,15 +752,19 @@ try {
 }
 ```
 
-An artifact is machine code that runs inside the PHP process. Only load artifacts you built yourself, from a place only you can write to. The checksum inside an artifact catches a corrupted file, not a tampered one. `serialize()` of a `Module` or `Component` stays unsupported on purpose, so that `unserialize()` on user input can never load machine code.
+An artifact is machine code that runs inside the PHP process. Only load artifacts you built yourself, from a place only you can write to. The checksum inside an artifact catches a corrupted file, not a tampered one.
+
+`serialize()` of a `Module` or `Component` stays unsupported on purpose, so that `unserialize()` on user input can never load machine code.
 
 ## Limits worth knowing
 
 - Recursion that alternates between wasm and PHP callbacks counts against wasmtime's 512 KiB stack budget, which allows roughly 140 levels in a release build. Going deeper throws a `RuntimeError` rather than crashing.
-- wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store. A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
+- wasmtime frees an instance only together with its store (see [Stores](#stores)). In a long-running worker (RoadRunner, FrankenPHP worker mode, Swoole), cache the `Module` between requests, which is not tied to a store.
+- A standalone object you keep for the whole worker, such as a cached `Memory`, keeps its store alive, and with it every instance that imports it. Give such objects their own `Wasm\Store`, or create them per job.
 - PHP values held by wasm (externref, callables behind imports) are invisible to PHP's cycle collector. A callback that captures its own instance, or an object the instance imports, keeps that instance and its store alive until the PHP process ends.
 - A plain PHP callback cannot switch Fibers while wasm waits for it: `Fiber::suspend()` inside it throws a `FiberError`. Wrap the callback in `Wasm\Suspending` to allow it (see [Async imports](#async-imports)). Calling wasm from inside a Fiber, and suspending between calls, works as usual.
-- WASI covers preview1 for core modules and preview2 for components. The async component model runs (see [Components](#components)), but the WASI 0.3 interfaces are not linked yet. File access in a forked child after the parent used WASI is tested for both. A program that waits on a file and a timer at once in a forked child has not been tested.
+- WASI covers preview1 for core modules and preview2 for components. The async component model runs (see [Components](#components)), but the WASI 0.3 interfaces are not linked yet.
+- File access in a forked child after the parent used WASI is tested for both preview1 and preview2. A program that waits on a file and a timer at once in a forked child has not been tested.
 
 ## Development
 
