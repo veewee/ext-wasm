@@ -18,6 +18,24 @@ var_dump($instance->exports->add(1, 2)); // wasm says 1, int(3)
 
 The extension is experimental. The API can still change before a 1.0 release.
 
+## Examples
+
+The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
+
+- [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
+- [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
+- [examples/html](examples/html) sanitizes untrusted HTML with ammonia and rewrites responses with Cloudflare's lol-html, for lazy images, CSP nonces and safe links.
+- [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
+- [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
+- [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
+- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
+- [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
+- [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
+- [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
+- [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
+- [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
+- [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
+
 ## Installation
 
 Install it with [PIE](https://github.com/php/pie):
@@ -73,24 +91,6 @@ parameters:
     <file name="stubs/ext-wasm.stubs.php" />
 </stubs>
 ```
-
-## Examples
-
-The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
-
-- [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
-- [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
-- [examples/html](examples/html) sanitizes untrusted HTML with ammonia and rewrites responses with Cloudflare's lol-html, for lazy images, CSP nonces and safe links.
-- [examples/python](examples/python) runs Python code in CPython 3.12 compiled to WASI.
-- [examples/quickjs](examples/quickjs) shares JavaScript checkout rules between the browser and PHP, running them in QuickJS through WASI.
-- [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
-- [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
-- [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
-- [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
-- [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
-- [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
-- [examples/async](examples/async) runs ten wasm lookups concurrently with Amp through `Wasm\Suspending` imports.
-- [examples/typst](examples/typst) renders PDF invoices from a Typst template and PHP data, with the Typst compiler built to wasm.
 
 ## Usage
 
