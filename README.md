@@ -295,10 +295,13 @@ $instance->exports->renderHtml('**hi**');                            // a functi
 
 A PHP import returns its ok value directly and signals an err by throwing `new ComponentError($payload)`, or it returns a `Result`. Any other exception reaches the caller as the original object. Unlike a core instance, a component instance is unusable after a call fails, whether through a trap or an exception from an import: the component model marks it as trapped, and the next call throws a `RuntimeError` "cannot enter component instance". A PHP import may call back into its own instance.
 
-#### WASI and network access
+#### WASI
 
 
 With `wasi:`, the `Wasm\Wasi` object provides every `wasi:*` import, as preview2, with the same sandbox as for core modules. `$wasi->start($instance)` runs a command component's `wasi:cli/run` and returns its exit code. Rust's standard library on `wasm32-wasip2` reports any failing exit as 1. A component that imports WASI without a `Wasi` object fails with a `LinkError`, like any missing import.
+
+#### Outgoing HTTP
+
 
 A component can make HTTP and HTTPS requests through `wasi:http` when the `Wasi` object lists the hosts it may reach:
 
@@ -308,6 +311,9 @@ $wasi = new Wasm\Wasi(httpHosts: ['api.example.com', 'localhost:8080', '*.exampl
 
 An entry is a host (any port), `host:port` (only that port; a URL without a port uses 80 or 443), or `*.domain` (its subdomains, not the domain itself). Hosts are compared without case, IPv6 addresses are written in brackets (`[::1]:8080`), and international domains in punycode. A request to any other host fails inside the component with `HttpRequestDenied` before anything is sent. Without `httpHosts`, a component that imports `wasi:http` fails with a `LinkError`, and an empty list denies every request. Connecting, waiting for the response headers and every wait between body chunks are each limited to PHP's `default_socket_timeout`, read when the component is instantiated, and the whole setup until the headers, TLS handshake included, to twice that. With a timeout of 0 or less, wasmtime's own limit of 600 seconds per step applies and the TLS handshake has none. Redirects are not followed, so the component sees them and every next request is checked again. The list is checked by name: an allowed name that resolves to a private address still connects. HTTPS uses rustls with the Mozilla root certificates built in. `httpHosts` has no effect for core modules, which have no HTTP in WASI preview1.
 
+#### TCP sockets
+
+
 A component can open TCP connections through `wasi:sockets`, for example a database or cache client using Rust's `std::net::TcpStream`, when the `Wasi` object lists the destinations it may reach:
 
 ```php
@@ -315,6 +321,9 @@ $wasi = new Wasm\Wasi(tcpHosts: ['db.internal:5432', '10.0.0.0/8:6379', '[fd00::
 ```
 
 An entry is a host, an IP address or a network in CIDR notation, followed by a port or `*` for any port; IPv6 goes in brackets. wasmtime checks every connect by address and port only, because the component resolves names itself, so a host entry is checked by resolving it on the host at the moment the component connects. It allows whatever addresses the name resolves to, also when the component connects to one of them by address. A connect to anything else fails inside the component with a permission error, before a packet is sent. Without `tcpHosts`, or with an empty list, every connect is refused. Name lookups are only turned on when `tcpHosts` or `udpHosts` holds a host entry: a component that connects by name to an IP-only list gets a lookup error. While lookups are on, the component can look up any name, which sends those names to the host's resolver. Listening stays refused, and UDP needs `udpHosts`; a bind to the wildcard address with port 0 is allowed, because every connect makes that bind first, but listening on it is not. A wide network such as `0.0.0.0/0` includes loopback and link-local addresses, a host entry whose name resolves to a private address allows that address, and an IPv6 rule ignores the interface a link-local address is reached through. The extension's own lookup for a name rule waits at most PHP's `default_socket_timeout` and counts as a refusal after that. There is no timeout from the extension for the connect itself, and `max_execution_time` does not interrupt a connect that hangs (75 seconds on macOS for an address that never answers). As with wasm code that loops, PHP's hard timeout ends the whole process `hard_timeout` seconds after the limit, without running shutdown functions. So connect with a timeout in the component, such as Rust's `TcpStream::connect_timeout`. On `wasm32-wasip2` that call returns `Ok` for a refused connection too, so check `take_error()` on the stream afterwards, as [examples/service-probe](examples/service-probe) does. `tcpHosts` has no effect for core modules, which have no outgoing sockets in WASI preview1.
+
+#### UDP sockets
+
 
 UDP works the same way with `udpHosts`, for a metrics client that sends StatsD datagrams or a client that asks a DNS server:
 
