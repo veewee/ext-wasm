@@ -13,7 +13,7 @@ categories = ["wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
-ext-php-rs = "=0.16.0"
+ext-php-rs = "=0.16.2"
 rayon = "=1.12.0"
 wasmparser = { version = "=0.259.0", default-features = false, features = ["std"] }
 wat = "=1.261.0"
