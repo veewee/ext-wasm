@@ -114,6 +114,10 @@ jobs:
         run: |
           examples/html/build.sh
           php -d "extension=$PWD/target/release/libwasm.so" examples/html/middleware.php | grep -q 'loading="lazy"'
+      - name: Build and run the git example
+        run: |
+          examples/git/build.sh
+          php -d "extension=$PWD/target/release/libwasm.so" examples/git/log.php . HEAD 1 | grep -q "^$(git rev-parse --short=7 HEAD) "
       - name: Build and run the Typst example
         run: |
           examples/typst/build.sh
