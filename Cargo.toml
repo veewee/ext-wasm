@@ -27,7 +27,7 @@ http-body-util = "=0.1.5"
 # Already a dependency of wasmtime (via its object crate); checksums precompiled artifacts, see src/precompiled.rs.
 crc32fast = "=1.5.2"
 # Already a dependency of wasmtime-wasi; used directly for a runtime per process, see engine.rs.
-tokio = { version = "=1.53.3", default-features = false, features = ["rt-multi-thread", "time", "net", "sync"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "time", "net", "sync"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
