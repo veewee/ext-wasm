@@ -1,0 +1,56 @@
+package docs:git@0.1.0;
+
+interface repositories {
+    record signature {
+        name: string,
+        email: string,
+        /// Seconds since the Unix epoch.
+        time: s64,
+        /// The offset from UTC the time was recorded in.
+        offset-minutes: s32,
+    }
+
+    record commit {
+        hash: string,
+        tree: string,
+        parents: list<string>,
+        author: signature,
+        committer: signature,
+        message: string,
+    }
+
+    record tree-entry {
+        name: string,
+        hash: string,
+        /// The file mode as git stores it, such as 0o100644 or 0o040000.
+        mode: u32,
+        /// blob, tree or commit (a submodule).
+        kind: string,
+    }
+
+    /// An open repository. It reads the object database and the refs on
+    /// every call, so it sees new commits, and keeps the pack indexes it
+    /// has loaded for as long as it lives.
+    resource repository {
+        /// Opens the repository at `path`, a working tree or a bare one.
+        open: static func(path: string) -> result<repository, string>;
+
+        /// The full hash `revision` points at, such as HEAD, main~3, v1.0^{commit} or HEAD:src/main.c.
+        resolve: func(revision: string) -> result<string, string>;
+
+        commit: func(revision: string) -> result<commit, string>;
+
+        /// Up to `limit` commits reachable from `revision`, newest first by commit time.
+        log: func(revision: string, limit: u32) -> result<list<commit>, string>;
+
+        /// The entries of the tree `revision` points at, such as HEAD^{tree} or HEAD:src.
+        tree: func(revision: string) -> result<list<tree-entry>, string>;
+
+        /// The content of the blob `revision` points at, such as HEAD:README.md.
+        blob: func(revision: string) -> result<list<u8>, string>;
+    }
+}
+
+world git-reader {
+    export repositories;
+}

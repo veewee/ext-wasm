@@ -20,7 +20,7 @@ The extension is experimental. The API can still change before a 1.0 release.
 
 ## Examples
 
-The [examples](examples) folder has small scripts for each feature, and thirteen larger ones:
+The [examples](examples) folder has small scripts for each feature, and fourteen larger ones:
 
 - [examples/doom](examples/doom) plays DOOM in your terminal, with PHP running the game loop, the keyboard and the drawing.
 - [examples/mago](examples/mago) runs the formatter of [mago](https://github.com/carthage-software/mago) from its official wasm build.
@@ -30,6 +30,7 @@ The [examples](examples) folder has small scripts for each feature, and thirteen
 - [examples/oxipng](examples/oxipng) optimises PNG files losslessly with oxipng, taken from an npm package built for browsers.
 - [examples/rust-markdown](examples/rust-markdown) writes part of a PHP application in Rust: a Markdown renderer built on pulldown-cmark as a component, called with PHP strings.
 - [examples/link-preview](examples/link-preview) fetches web pages from a component for link previews and a Markdown reader mode, both as typed calls and as an HTTP service behind PHP, reaching only the hosts PHP allows.
+- [examples/git](examples/git) reads git repositories with libgit2, a C library compiled to a component, without a git binary or FFI.
 - [examples/service-probe](examples/service-probe) works out what listens on a list of ports (SSH, SMTP, MySQL, PostgreSQL, Redis, HTTP and more) with a component that may connect to exactly those ports and nothing else.
 - [examples/stream-gzip](examples/stream-gzip) compresses files of any size with an async component that reads and writes streams, with flat memory in PHP.
 - [examples/kv-server](examples/kv-server) is a small Redis compatible key-value server: PHP accepts the connections and an async component speaks the protocol over streams.
