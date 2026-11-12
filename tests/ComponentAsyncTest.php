@@ -107,16 +107,9 @@ final class ComponentAsyncTest extends TestCase
         self::assertSame('the store is busy with a suspended call', $error);
     }
 
-    public function test_an_async_component_stays_usable_after_an_import_throws(): void
+    public function test_an_import_that_throws_poisons_an_async_component(): void
     {
-        $throw = true;
-        $exports = self::demo(function (int $n) use (&$throw): int {
-            if ($throw) {
-                throw new \RuntimeException('boom');
-            }
-
-            return $n;
-        });
+        $exports = self::demo(fn (int $n): int => throw new \RuntimeException('boom'));
 
         try {
             $exports->run(1);
@@ -124,11 +117,14 @@ final class ComponentAsyncTest extends TestCase
         } catch (\RuntimeException $e) {
             self::assertSame('boom', $e->getMessage());
         }
-        $throw = false;
-        self::assertSame(3, $exports->run(2));
+
+        // Like a synchronous call, a failed async call leaves its instance trapped.
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('cannot enter component instance');
+        $exports->run(2);
     }
 
-    public function test_an_async_component_stays_usable_after_its_fiber_is_destroyed_mid_call(): void
+    public function test_destroying_its_fiber_mid_call_poisons_an_async_component(): void
     {
         $exports = self::demo(new Suspending(fn (int $n): int => \Fiber::suspend() + $n));
         $fiber = new \Fiber(fn (): int => $exports->run(1));
@@ -136,10 +132,9 @@ final class ComponentAsyncTest extends TestCase
         unset($fiber);
         gc_collect_cycles();
 
-        $again = new \Fiber(fn (): int => $exports->run(2));
-        $again->start();
-        $again->resume(5);
-        self::assertSame(8, $again->getReturn());
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('cannot enter component instance');
+        $exports->run(2);
     }
 
     public function test_a_stream_returned_by_a_call_is_read_after_the_call_returned(): void

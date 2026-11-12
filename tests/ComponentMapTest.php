@@ -9,8 +9,8 @@ use PHPUnit\Framework\TestCase;
 use Wasm\Component\Component;
 use Wasm\Component\Exports;
 use Wasm\Component\Instance;
+use Wasm\Exception\CompileError;
 use Wasm\Exception\LinkError;
-use Wasm\Exception\RuntimeError;
 
 /** WIT map<k, v> as a PHP array from key to value. */
 final class ComponentMapTest extends TestCase
@@ -49,13 +49,6 @@ final class ComponentMapTest extends TestCase
               (i32.store (i32.const 432) (i32.const 3))
               (i32.store (i32.const 0) (i32.const 400))
               (i32.store (i32.const 4) (i32.const 3))
-              (i32.const 0))
-            ;; map<f32, u32> with one entry 1.0: 1
-            (func (export "float-result") (result i32)
-              (f32.store (i32.const 400) (f32.const 1))
-              (i32.store (i32.const 404) (i32.const 1))
-              (i32.store (i32.const 0) (i32.const 400))
-              (i32.store (i32.const 4) (i32.const 1))
               (i32.const 0)))
           (core instance $i (instantiate $m))
           (alias core export $i "memory" (core memory $mem))
@@ -83,11 +76,7 @@ final class ComponentMapTest extends TestCase
           (func (export "in-record") (param "r" $counts) (result $counts)
             (canon lift (core func $i "record") (memory $mem) (realloc $realloc)))
           (func (export "dupes") (result (map string u32))
-            (canon lift (core func $i "dupes") (memory $mem) (realloc $realloc)))
-          (func (export "floats") (param "m" (map f32 u32)) (result (map f32 u32))
-            (canon lift (core func $i "pair") (memory $mem) (realloc $realloc)))
-          (func (export "float-result") (result (map f32 u32))
-            (canon lift (core func $i "float-result") (memory $mem) (realloc $realloc))))
+            (canon lift (core func $i "dupes") (memory $mem) (realloc $realloc))))
         WAT;
 
     private static function exports(): Exports
@@ -167,22 +156,6 @@ final class ComponentMapTest extends TestCase
         self::exports()->$function($value);
     }
 
-    public function test_a_map_with_keys_php_cannot_hold_fails_when_called(): void
-    {
-        $this->expectException(RuntimeError::class);
-        $this->expectExceptionMessage('map<f32, u32>');
-
-        self::exports()->floats([]);
-    }
-
-    public function test_a_returned_map_with_keys_php_cannot_hold_fails_naming_its_type(): void
-    {
-        $this->expectException(RuntimeError::class);
-        $this->expectExceptionMessage('map<f32, u32>');
-
-        self::exports()->floatResult();
-    }
-
     public function test_a_bad_key_says_it_is_a_key(): void
     {
         $this->expectException(\TypeError::class);
@@ -243,14 +216,12 @@ final class ComponentMapTest extends TestCase
         new Instance($component, ['take' => static fn (array $m) => null]);
     }
 
-    public function test_an_import_with_keys_php_cannot_hold_is_a_link_error(): void
+    public function test_a_float_key_is_not_a_valid_component(): void
     {
-        $component = new Component('(component (import "take" (func (param "m" (map f32 u32)))))');
+        $this->expectException(CompileError::class);
+        $this->expectExceptionMessage('invalid map key type');
 
-        $this->expectException(LinkError::class);
-        $this->expectExceptionMessage('map<f32, u32>');
-
-        new Instance($component, ['take' => static fn (array $m) => null]);
+        new Component('(component (import "take" (func (param "m" (map f32 u32)))))');
     }
 
     public function test_maps_are_reflected(): void
@@ -263,12 +234,5 @@ final class ComponentMapTest extends TestCase
         self::assertSame('map', $map->kind);
         self::assertSame('string', $map->key->kind);
         self::assertSame('u32', $map->element->kind);
-    }
-
-    public function test_keys_php_cannot_hold_are_still_reflected(): void
-    {
-        $floats = array_column((new Component(self::COMPONENT))->exports(), null, 'name')['floats'];
-
-        self::assertSame('f32', $floats['signature']->params['m']->key->kind);
     }
 }

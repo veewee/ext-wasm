@@ -440,7 +440,6 @@ enum Direction {
 fn unsupported_part(ty: &Type, direction: Direction) -> Option<String> {
     let nested = |types: Vec<Type>| types.iter().find_map(|ty| unsupported_part(ty, direction));
     match ty {
-        Type::Map(map) if !crate::component::value::is_map_key(&map.key()) => Some(wit_type(ty)),
         Type::Map(map) => unsupported_part(&map.value(), direction),
         Type::FixedLengthList(_) => Some(wit_type(ty)),
         Type::ErrorContext if direction == Direction::FromPhp => Some(wit_type(ty)),
