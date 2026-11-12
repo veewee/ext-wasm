@@ -482,7 +482,7 @@ Streams and futures carry `bool`, numbers and `string`, and futures carry `char`
 
 A read that can never progress, because the component waits for something that never happens, throws a `RuntimeError` instead of hanging.
 
-Unlike other component instances, an instance that uses the async component model stays usable after a PHP import throws or its Fiber is destroyed mid call. A trap inside the component still leaves it unusable.
+Like other component instances, an instance that uses the async component model is unusable after a failed call: a trap, a PHP import that throws, or a Fiber destroyed mid call. Create a new instance to carry on.
 
 wasmtime documents its support for the async component model as very incomplete, so this part may change with wasmtime upgrades. The WASI 0.3 interfaces are not linked yet, so a component built against them fails to link.
 

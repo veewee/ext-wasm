@@ -231,9 +231,6 @@ pub fn to_val(
         }
         Type::Map(map) => {
             let (key_ty, value_ty) = (map.key(), map.value());
-            if !is_map_key(&key_ty) {
-                return Err(unsupported(ty));
-            }
             let table = value.array().ok_or_else(|| {
                 ConvertError::Type(format!(
                     "expected array for {}, got {}",
@@ -433,9 +430,6 @@ pub fn from_val(
             return list_of(items.iter().map(|item| from_val(ctx, item, &element)));
         }
         (Val::Map(pairs), Type::Map(map)) => {
-            if !is_map_key(&map.key()) {
-                return Err(unsupported(ty));
-            }
             let value_ty = map.value();
             let mut table = ZendHashTable::new();
             for (key, item) in pairs {
@@ -739,25 +733,6 @@ fn assoc_array<'a>(
         }
     }
     Ok(table)
-}
-
-/// Key types a PHP array can hold. The component model currently allows no others, but
-/// wasmparser does not check that.
-pub fn is_map_key(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Bool
-            | Type::S8
-            | Type::U8
-            | Type::S16
-            | Type::U16
-            | Type::S32
-            | Type::U32
-            | Type::S64
-            | Type::U64
-            | Type::Char
-            | Type::String
-    )
 }
 
 /// A PHP array key as a map key of type `ty`. PHP stores numeric string keys,
