@@ -38,7 +38,7 @@ check() {
 }
 
 for platform in linux/arm64 linux/amd64; do
-    for image in php:8.2-cli php:8.3-cli php:8.4-cli php:8.5-cli php:8.4-zts; do
+    for image in php:8.2-cli php:8.3-cli php:8.4-cli php:8.5-cli php:8.6-cli php:8.4-zts; do
         check "$image" "$platform"
     done
 done
