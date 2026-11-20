@@ -55,7 +55,7 @@ RUN pie install veewee/ext-wasm
 
 PIE finds the prebuilt binary through the GitHub API, which allows 60 requests an hour without a token. When many builds share an address, as on CI runners, give PIE a token through Composer's `COMPOSER_AUTH`, for example `COMPOSER_AUTH='{"github-oauth":{"github.com":"<token>"}}'`. Otherwise PIE falls back to building from source, which needs Rust.
 
-The release workflow attaches prebuilt binaries for PHP 8.2 to 8.5 to each release, and PIE picks the one for your platform:
+The release workflow attaches prebuilt binaries for PHP 8.2 to 8.6 to each release, and PIE picks the one for your platform:
 
 | Platform | Prebuilt | Without a prebuilt binary |
 |---|---|---|
@@ -64,7 +64,7 @@ The release workflow attaches prebuilt binaries for PHP 8.2 to 8.5 to each relea
 | Windows x86_64 | NTS | PIE cannot build from source on Windows, so ZTS PHP is not supported there |
 | Linux with musl (Alpine), macOS x86_64, other Unix | | PIE builds from source, which needs a Rust toolchain from [rustup.rs](https://rustup.rs) and clang |
 
-CI runs the test suite on Linux, macOS and Windows for PHP 8.2 to 8.5, and on thread-safe PHP 8.4 on Linux.
+CI runs the test suite on Linux, macOS and Windows for PHP 8.2 to 8.6, and on thread-safe PHP 8.4 on Linux.
 
 To build from a checkout:
 
