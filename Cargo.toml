@@ -21,7 +21,7 @@ wasmtime = { version = "=50.0.1", default-features = false, features = ["craneli
 wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p1"] }
 wasmtime-wasi-http = { version = "=50.0.1", default-features = false, features = ["default-send-request", "p2"] }
 # Already dependencies of wasmtime-wasi-http; used directly for the host allowlist, see src/component/http.rs.
-bytes = "=1.12.1"
+bytes = "=1.12.2"
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 # Already a dependency of wasmtime (via its object crate); checksums precompiled artifacts, see src/precompiled.rs.
